@@ -19,4 +19,4 @@
 | 用量参考 | src-tauri/src/usage_limits.rs、usage_stats.rs、engine/codex_usage.rs | S06 对照官方接口，不能混成订阅余额 |
 | 远程/电脑控制/插件 | src-tauri/src/web.rs、relay.rs、computer_use.rs、plugins/、dsh_host.rs | 不在当前 IPC 注册表或启动链；没有本版实现任务 |
 
-S01 拟新增 `src-tauri/src/multicli/` 与 `src/multicli/{domain,navigation,...}`：这些是允许的目标目录，尚不存在领域实现，禁止据表假定已有 API。正式 IPC/领域约定见 docs/contracts/。上游全部旧命令没有自动获得 MultiCLI 授权。
+S01 数据层现已存在：`src-tauri/src/multicli/{domain,error,store,repo,service}.rs`，公开入口 `MultiCliService`，数据库 `multicli.db`，schema version 2。`mod.rs` 公开类型/服务，`tests.rs` 包含正式回归。产品 IPC 和导航尚未实现；`src-tauri/src/multicli/ipc.rs` 与 `src/multicli/{domain,navigation,...}` 是下一阶段包的拟新增路径，不可假定已存在。正式 IPC/领域约定见 docs/contracts/；旧命令没有自动获得 MultiCLI 授权。

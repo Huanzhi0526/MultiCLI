@@ -17,6 +17,8 @@ try {
         $multicliSavedProfile = $env:MULTICLI_PROFILE
         try {
             $env:MULTICLI_PROFILE = 'test'
+            & cargo test --locked --manifest-path src-tauri/Cargo.toml --lib 'multicli::' -- --test-threads=1
+            if ($LASTEXITCODE -ne 0) { throw 'MultiCLI domain tests failed' }
             & cargo test --locked --manifest-path src-tauri/Cargo.toml --lib multicli_bootstrap -- --test-threads=1
             if ($LASTEXITCODE -ne 0) { throw 'MultiCLI native tests failed' }
         } finally {

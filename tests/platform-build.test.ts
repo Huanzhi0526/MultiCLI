@@ -36,6 +36,7 @@ test("Windows verification requires locked Rust checks and real MultiCLI tests b
   const verify = read("scripts/multicli/verify.ps1");
   assert.match(verify, /cargo check --locked/);
   assert.match(verify, /cargo test --locked.*--lib multicli_bootstrap/);
+  assert.match(verify, /cargo test --locked.*--lib 'multicli::'/);
   assert.match(verify, /tauri build --bundles nsis --no-sign/);
   assert.ok(verify.indexOf("cargo test") < verify.indexOf("tauri build"));
   assert.match(verify, /throw 'MultiCLI native tests failed'/);

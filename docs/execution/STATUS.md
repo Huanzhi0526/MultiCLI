@@ -1,21 +1,18 @@
 # MultiCLI 执行状态
 
-2026-11-01，Asia/Shanghai。**S00 独立验收 ACCEPTED**；S01–S07 NOT_RUN。S00 是底座准入，不是首版产品完成。
+2026-11-01，Asia/Shanghai。S00 ACCEPTED；S01 IN_PROGRESS，其中数据层已 ACCEPTED，剩余功能整阶段派发；S02–S07 NOT_RUN。
 
-- 正式仓库 app，当前分支 multicli/s00；源自 Desktop CC GUI v1.2.0 / 6c46345a727e7c1b57e0dacecb4fe063d88ee8dc，保留上游历史与 MIT 版权。
-- origin：https://github.com/Huanzhi0526/MultiCLI.git，用户指定公开仓库；upstream 只作来源。S00 源码提交 `6927a033075fbfc0a7b6c7e630711cb6309eed4a` 已推送 main 并核对远端 SHA。本文件的后续状态补录只修改文档，最终手动卡以补录后的实际 HEAD 为 base_commit。
-- 仅 Sol / DeepSeek 两个角色，本项目不使用 Baton，不自动启动开发 Agent。DeepSeek 尚未派工；下一步准备 S01-01，由用户手动转交。
-- DeepSeek 模型 ID、上下文、强度以用户实际宿主配置为准，当前未取得，不能假填。
-- 续验脚本已结束，18:28 完成 Rust→Test→Package；桌面验收后应用已关闭。原始证据留在项目根 scratch/s00，不入 Git。
-- CI：源码首次推送后查询 GitHub Actions API，尚未返回该 SHA 的运行（0 条），记 NOT_RUN；不将本地通过写成 CI 通过。
+- 主要开发：WorkBuddy / deepseek flash 1017 / 1M / max，由用户手动转交与回交。本项目不用 Baton，不自动启动其他开发 Agent。
+- 用户最新节奏：以整个阶段交接；原子批次只作为历史或内部检查项，不再分别派 S01-02/S01-03。验收末尾的小修可由 Sol 直接处理或酌用 Luna；本轮 Sol 直接完成，未新增 Agent。
+- 数据层基线 c3db27a8158bb0fef03a82dfafb74a7302250a58。主要实现及 R1 修复由 DeepSeek 完成；Sol 独立复验后补四个相邻小缺口，38 项领域、3 项 S00、13 项独立探针和 4 项构建边界全部通过。
+- 本批受测清单与 Git 对照放在 scratch/S01-01/acceptance-r1，不将原始数据库/日志或安装包进 Git。当前报告随已验收源码保存，提交与同步核验以 HEAD/origin/main 和根 STATUS 为准。
+- S00 的 Windows CI 已核实 success（运行 41304638979）；本批新提交的 CI 单独记录，不继承旧 PASS。
+- 正式仓库 app，origin 为 https://github.com/Huanzhi0526/MultiCLI.git，upstream 只读；不 force push，不公开发布 Release。
 
-| 阶段 | 实现 | 独立验收 | commit | push |
-|---|---|---|---|---|
-| S00 | 已完成本阶段范围 | ACCEPTED | `6927a033075f` | main 已核实 |
-| S01–S07 | NOT_RUN | NOT_RUN | — | — |
+| 阶段 | 实现与验收 | 下一步 |
+|---|---|---|
+| S00 | ACCEPTED，源码/测试包/独立桌面与 Git 同步已记录 | 保留边界 |
+| S01 | 数据层 ACCEPTED，整阶段未完成 | 一张 S01 完整剩余任务卡 |
+| S02–S07 | NOT_RUN | 等待前置阶段 |
 
-独立结果见 [S00-ACCEPTANCE](S00-ACCEPTANCE.md)。Rust 检查 PASS；3 项原生测试 PASS；安装包构建 PASS；dev/test/prod 真实桌面与 PTY 按钮均 PASS；用户级安装、安装版默认 prod 与真实 PTY PASS。原生完整产品终端/IME、多 CLI 权限及恢复、真实历史导入和额度仍未实现或未测，留待对应阶段。
-
-下一批只做 S01-01 数据模型、迁移、服务和测试，不接入真实 CLI、不开发全阶段 UI。必须以最终已保存源码的 HEAD 生成带 base_commit 的独立手动任务材料；用户回交后冻结开发，再由 Sol 验收。
-
-首次同步补齐了固定上游 v1.2.0 的完整历史对象：当前受测提交可达 115,603 个对象、missing=0。首次推送认证由用户完成；未改写历史、未 force push。GitHub Actions 状态独立记录，不据本地测试推断远端 CI 通过。
+详细范围、证据、主管小修和未测项见 [S01 阶段验收](S01-ACCEPTANCE.md)；S00 见 [原验收](S00-ACCEPTANCE.md)。尚未实现产品 IPC、双向导航、正式 Workspace 规范化/worktree 分组与诊断导出；下一张 S01 卡覆盖全部余项，不扩大到真实 CLI、历史、远程或账号系统。

@@ -50,6 +50,7 @@ pub mod usage_limits;
 pub mod usage_stats;
 pub mod web;
 pub mod window_state;
+pub mod multicli;
 pub mod multicli_bootstrap;
 
 use std::sync::Arc;

@@ -849,6 +849,29 @@ impl SessionQuery {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityQuery {
+    pub agent_id: String,
+    pub limit: u32,
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+impl CapabilityQuery {
+    pub fn page_request(&self) -> PageRequest {
+        PageRequest {
+            limit: self.limit,
+            cursor: self.cursor.clone(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), AppError> {
+        require_text("agentId", &self.agent_id)?;
+        self.page_request().validate()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Read models for the internal navigation service
 // ---------------------------------------------------------------------------

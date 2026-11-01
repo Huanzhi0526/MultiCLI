@@ -1,12 +1,14 @@
-//! MultiCLI domain layer (S01-01).
+//! MultiCLI domain layer (S01).
 //!
 //! This module owns the frozen v1 domain DTOs, the isolated SQLite store and
-//! its versioned migrations, plus the internal query service used by the
-//! navigation UI in S01-02. It deliberately does not register any product IPC,
-//! touch the upstream database, or fabricate demo rows at startup.
+//! its versioned migrations, real path/worktree resolution, the internal
+//! query service used by the navigation UI, and the redacted diagnostics
+//! document. Product IPC is registered in `multicli_bootstrap`.
 
+pub mod diagnostics;
 pub mod domain;
 pub mod error;
+pub mod path;
 mod repo;
 mod service;
 mod store;
@@ -14,14 +16,20 @@ mod store;
 #[cfg(test)]
 mod tests;
 
+pub use diagnostics::{DiagnosticsExport, DIAGNOSTICS_SCHEMA_VERSION};
 pub use domain::{
     AgentDefinition, AgentInstallation, AgentListItem, Capability, CapabilityEvidenceLevel,
-    CapabilityName, CapabilityStatus, EventEnvelope, ExecutionStatus, Host, HostKind, HostPath,
-    InteractionStatus, LinkKind, Message, Page, PageRequest, PathStyle, ProcessIdentity,
-    ProcessObservation, Run, RunOwnership, RunProcessLink, RunTransport, Session, SessionDetail,
-    SessionOrigin, SessionQuery, SessionRelation, SessionRelationKind, SessionSummary,
-    SessionWorkspace, SessionWorkspaceRole, Workspace, WorkspaceListItem,
+    CapabilityName, CapabilityQuery, CapabilityStatus, EventEnvelope, EvidenceLevel,
+    ExecutionStatus, Host, HostKind, HostPath, InteractionStatus, LinkKind, Message, Page,
+    PageRequest, PathStyle, ProcessIdentity, ProcessObservation, Run, RunOwnership, RunProcessLink,
+    RunTransport, Session, SessionDetail, SessionOrigin, SessionQuery, SessionRelation,
+    SessionRelationKind, SessionSummary, SessionWorkspace, SessionWorkspaceRole, Workspace,
+    WorkspaceListItem,
 };
 pub use error::{AppError, ErrorCode};
+pub use path::{
+    workspace_from_resolved, GitStatus, PathResolutionError, PathResolutionStatus,
+    ResolvedWorkspacePath,
+};
 pub use service::MultiCliService;
 pub use store::{BackupInfo, MigrationReport, MultiCliStore, SCHEMA_VERSION};

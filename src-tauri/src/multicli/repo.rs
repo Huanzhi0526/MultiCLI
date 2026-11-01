@@ -223,6 +223,67 @@ fn map_workspace(row: &Row<'_>) -> rusqlite::Result<Workspace> {
     })
 }
 
+pub(crate) fn find_workspace_by_canonical(
+    conn: &Connection,
+    host_id: &str,
+    canonical_path: &str,
+) -> Result<Option<Workspace>, AppError> {
+    Ok(conn
+        .query_row(
+            "SELECT id, host_id, display_path, canonical_path, repo_group_id, worktree_id
+             FROM workspaces WHERE host_id = ?1 AND canonical_path = ?2",
+            params![host_id, canonical_path],
+            map_workspace,
+        )
+        .optional()?)
+}
+
+/// Inserts a workspace unless the same `(hostId, canonicalPath)` already
+/// exists. The first registration wins; a later alias returns the stored row
+/// instead of creating a duplicate.
+pub(crate) fn ensure_workspace_by_identity(
+    conn: &mut Connection,
+    workspace: &Workspace,
+) -> Result<Workspace, AppError> {
+    let canonical =
+        workspace.path.canonical_path.as_deref().ok_or_else(|| {
+            AppError::invalid_argument("canonicalPath", "workspace must be resolved")
+        })?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if let Some(existing) = find_workspace_by_canonical(&tx, &workspace.path.host_id, canonical)? {
+        tx.commit()?;
+        return Ok(existing);
+    }
+    let inserted = tx.execute(
+        "INSERT INTO workspaces(
+             id, host_id, display_path, canonical_path, repo_group_id, worktree_id, created_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            workspace.id.as_str(),
+            workspace.path.host_id.as_str(),
+            workspace.path.display_path.as_str(),
+            canonical,
+            workspace.repo_group_id.as_deref(),
+            workspace.worktree_id.as_deref(),
+            now_ms(),
+        ],
+    );
+    if let Err(error) = inserted {
+        let mapped = AppError::from(error);
+        if mapped.code == ErrorCode::Conflict {
+            if let Some(existing) =
+                find_workspace_by_canonical(&tx, &workspace.path.host_id, canonical)?
+            {
+                tx.commit()?;
+                return Ok(existing);
+            }
+        }
+        return Err(mapped);
+    }
+    tx.commit()?;
+    Ok(workspace.clone())
+}
+
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
@@ -922,6 +983,104 @@ pub(crate) fn list_capabilities(
          ORDER BY name, COALESCE(installation_id, '')",
     )?;
     let rows = statement.query_map([agent_id], map_capability)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Stable, paged capability list. The page identity is
+/// `(name, COALESCE(installationId, ''))`, which matches the table's unique
+/// scope and is stable across restarts.
+pub(crate) fn list_capabilities_page(
+    conn: &Connection,
+    agent_id: &str,
+    cursor: Option<(String, String)>,
+    fetch_limit: usize,
+) -> Result<(Vec<Capability>, u64), AppError> {
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM capabilities WHERE agent_id = ?1",
+        [agent_id],
+        |row| row.get(0),
+    )?;
+    let mut sql = String::from(
+        "SELECT agent_id, installation_id, name, status, version_range, evidence_level,
+                source, verified_at, reason
+         FROM capabilities WHERE agent_id = ?1",
+    );
+    let mut values = vec![Value::Text(agent_id.to_string())];
+    if let Some((name, scope)) = cursor {
+        sql.push_str(" AND (name > ? OR (name = ? AND COALESCE(installation_id, '') > ?))");
+        values.push(Value::Text(name.clone()));
+        values.push(Value::Text(name));
+        values.push(Value::Text(scope));
+    }
+    sql.push_str(" ORDER BY name, COALESCE(installation_id, '') LIMIT ?");
+    values.push(Value::Integer(fetch_limit as i64));
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), map_capability)?;
+    let rows = rows.collect::<Result<Vec<_>, _>>()?;
+    Ok((rows, count_u64(total)))
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct StoreCounts {
+    pub(crate) hosts: u64,
+    pub(crate) agents: u64,
+    pub(crate) installations: u64,
+    pub(crate) workspaces: u64,
+    pub(crate) sessions: u64,
+    pub(crate) runs: u64,
+    pub(crate) messages: u64,
+    pub(crate) capabilities: u64,
+    pub(crate) processes: u64,
+    pub(crate) run_process_links: u64,
+}
+
+pub(crate) fn store_counts(conn: &Connection) -> Result<StoreCounts, AppError> {
+    fn count(conn: &Connection, table: &str) -> Result<u64, AppError> {
+        let sql = format!("SELECT COUNT(*) FROM {table}");
+        let value: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
+        Ok(count_u64(value))
+    }
+    Ok(StoreCounts {
+        hosts: count(conn, "hosts")?,
+        agents: count(conn, "agents")?,
+        installations: count(conn, "agent_installations")?,
+        workspaces: count(conn, "workspaces")?,
+        sessions: count(conn, "sessions")?,
+        runs: count(conn, "runs")?,
+        messages: count(conn, "messages")?,
+        capabilities: count(conn, "capabilities")?,
+        processes: count(conn, "processes")?,
+        run_process_links: count(conn, "run_process_links")?,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapabilityBreakdownRow {
+    pub(crate) agent_id: String,
+    pub(crate) status: CapabilityStatus,
+    pub(crate) evidence_level: CapabilityEvidenceLevel,
+    pub(crate) count: u64,
+}
+
+pub(crate) fn capability_breakdown(
+    conn: &Connection,
+) -> Result<Vec<CapabilityBreakdownRow>, AppError> {
+    let mut statement = conn.prepare(
+        "SELECT agent_id, status, evidence_level, COUNT(*)
+         FROM capabilities
+         GROUP BY agent_id, status, evidence_level
+         ORDER BY agent_id, status, evidence_level",
+    )?;
+    let rows = statement.query_map([], |row| {
+        let status: String = row.get(1)?;
+        let evidence: String = row.get(2)?;
+        Ok(CapabilityBreakdownRow {
+            agent_id: row.get(0)?,
+            status: CapabilityStatus::parse_db(&status).map_err(conversion)?,
+            evidence_level: CapabilityEvidenceLevel::parse_db(&evidence).map_err(conversion)?,
+            count: count_u64(row.get(3)?),
+        })
+    })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 

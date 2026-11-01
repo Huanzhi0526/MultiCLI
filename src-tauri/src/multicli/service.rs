@@ -3,12 +3,18 @@
 //! S01-02 will expose these operations through `multicli_*` IPC. This batch
 //! deliberately registers no Tauri command and creates no rows on startup.
 
+use super::diagnostics::{
+    build_diagnostics, iso_timestamp, write_diagnostics, CapabilityCounts, DiagnosticsCounts,
+    DiagnosticsExport,
+};
 use super::domain::{
-    AgentDefinition, AgentInstallation, AgentListItem, Capability, Host, Message, Page,
-    PageRequest, ProcessIdentity, ProcessObservation, Run, RunProcessLink, Session, SessionDetail,
-    SessionQuery, SessionRelation, SessionSummary, SessionWorkspace, Workspace, WorkspaceListItem,
+    AgentDefinition, AgentInstallation, AgentListItem, Capability, CapabilityQuery, Host, Message,
+    Page, PageRequest, ProcessIdentity, ProcessObservation, Run, RunProcessLink, Session,
+    SessionDetail, SessionQuery, SessionRelation, SessionSummary, SessionWorkspace, Workspace,
+    WorkspaceListItem,
 };
 use super::error::AppError;
+use super::path::{self, ResolvedWorkspacePath};
 use super::repo;
 use super::store::{now_ms, MigrationReport, MultiCliStore};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -18,6 +24,7 @@ use parking_lot::MutexGuard;
 #[cfg(test)]
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -328,6 +335,127 @@ impl MultiCliService {
         repo::list_capabilities(&conn, agent_id)
     }
 
+    pub fn list_capabilities_page(
+        &self,
+        query: &CapabilityQuery,
+    ) -> Result<Page<Capability>, AppError> {
+        query.validate()?;
+        let cursor = query
+            .cursor
+            .as_deref()
+            .map(|cursor| decode_cursor(cursor, "capabilities"))
+            .transpose()?;
+        let conn = self.store.connection().lock();
+        let (rows, total) =
+            repo::list_capabilities_page(&conn, &query.agent_id, cursor, query.limit as usize + 1)?;
+        Ok(paginate(
+            rows,
+            total,
+            query.limit,
+            "capabilities",
+            |capability| {
+                (
+                    capability.name.as_str().to_string(),
+                    capability.installation_id.clone().unwrap_or_default(),
+                )
+            },
+            |capability| capability,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Paths and workspace identity
+    // -----------------------------------------------------------------------
+
+    /// Resolves a real Windows path without touching the database. Missing or
+    /// inaccessible directories keep `canonicalPath = null` and a status.
+    pub fn resolve_workspace_path(
+        &self,
+        host_id: &str,
+        display_path: &str,
+    ) -> ResolvedWorkspacePath {
+        path::resolve_workspace_path(host_id, display_path)
+    }
+
+    /// Registers a real directory as a workspace using its canonical identity.
+    /// Re-registering the same `(hostId, canonicalPath)` returns the stored row,
+    /// so case aliases and junctions do not create duplicates.
+    pub fn ensure_workspace_at_path(
+        &self,
+        host_id: &str,
+        display_path: &str,
+    ) -> Result<Workspace, AppError> {
+        let resolved = path::resolve_workspace_path(host_id, display_path);
+        let candidate = path::workspace_from_resolved(&resolved)?;
+        let mut conn = self.store.connection().lock();
+        repo::ensure_workspace_by_identity(&mut conn, &candidate)
+    }
+
+    // -----------------------------------------------------------------------
+    // Diagnostics
+    // -----------------------------------------------------------------------
+
+    /// Writes a redacted diagnostics document under `<dataRoot>/diagnostics`.
+    /// The UI receives the local file path; the file itself contains no paths,
+    /// messages, prompts, commands or native session ids.
+    pub fn export_diagnostics(&self, profile: &str) -> Result<DiagnosticsExport, AppError> {
+        if profile != "dev" && profile != "test" && profile != "prod" {
+            return Err(AppError::invalid_argument(
+                "profile",
+                "must be dev, test or prod",
+            ));
+        }
+        let epoch_ms = now_ms();
+        let created_at = iso_timestamp(epoch_ms);
+        let (counts, breakdown, journal_mode) = {
+            let conn = self.store.connection().lock();
+            let counts = repo::store_counts(&conn).map_err(retryable_read)?;
+            let breakdown = repo::capability_breakdown(&conn).map_err(retryable_read)?;
+            let journal_mode: String = conn
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .map_err(AppError::from)
+                .map_err(retryable_read)?;
+            (counts, breakdown, journal_mode)
+        };
+
+        let mut capabilities: BTreeMap<String, CapabilityCounts> = BTreeMap::new();
+        for row in breakdown {
+            let entry = capabilities.entry(row.agent_id).or_default();
+            match row.status {
+                super::domain::CapabilityStatus::Supported => entry.supported += row.count,
+                super::domain::CapabilityStatus::Unsupported => entry.unsupported += row.count,
+                super::domain::CapabilityStatus::Unverified => entry.unverified += row.count,
+            }
+            match row.evidence_level {
+                super::domain::CapabilityEvidenceLevel::Document => entry.document += row.count,
+                super::domain::CapabilityEvidenceLevel::Fixture => entry.fixture += row.count,
+                super::domain::CapabilityEvidenceLevel::Live => entry.live += row.count,
+            }
+        }
+
+        let document = build_diagnostics(
+            profile,
+            env!("CARGO_PKG_VERSION"),
+            self.schema_version(),
+            &journal_mode,
+            &DiagnosticsCounts {
+                hosts: counts.hosts,
+                agents: counts.agents,
+                installations: counts.installations,
+                workspaces: counts.workspaces,
+                sessions: counts.sessions,
+                runs: counts.runs,
+                messages: counts.messages,
+                capabilities: counts.capabilities,
+                processes: counts.processes,
+                run_process_links: counts.run_process_links,
+            },
+            &capabilities,
+            &created_at,
+        );
+        write_diagnostics(self.store.data_root(), &document, epoch_ms, &created_at)
+    }
+
     pub fn get_process(
         &self,
         identity: &ProcessIdentity,
@@ -369,4 +497,17 @@ fn require_id(field: &str, value: &str) -> Result<(), AppError> {
         return Err(AppError::invalid_argument(field, "must not be empty"));
     }
     Ok(())
+}
+
+fn retryable_read(error: AppError) -> AppError {
+    if matches!(
+        error.code,
+        super::error::ErrorCode::Database
+            | super::error::ErrorCode::Io
+            | super::error::ErrorCode::Timeout
+    ) {
+        error.with_retryable(true)
+    } else {
+        error
+    }
 }

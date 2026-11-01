@@ -5,6 +5,7 @@
 
 use super::domain::*;
 use super::error::{AppError, ErrorCode};
+use super::path::{GitStatus, PathResolutionStatus};
 use super::service::MultiCliService;
 use super::store::{MigrationFault, SCHEMA_VERSION};
 use rusqlite::{params, Connection};
@@ -2708,4 +2709,450 @@ fn unknown_nonempty_database_is_rejected_without_changing_its_bytes() {
             .unwrap(),
         "keep"
     );
+}
+
+#[test]
+fn diagnostics_anonymizes_agent_identifiers_that_contain_private_text() {
+    let root = TempRoot::new("private-agent-id");
+    let service = open(&root);
+    let private = r"C:\Users\PRIVATE_EXPORT_SENTINEL\secret-key";
+    service
+        .register_agent(&AgentDefinition {
+            id: private.into(),
+            vendor: "synthetic".into(),
+            display_name: "Synthetic".into(),
+        })
+        .unwrap();
+    service
+        .declare_capability(&Capability {
+            agent_id: private.into(),
+            installation_id: None,
+            name: CapabilityName::HistoryRead,
+            status: CapabilityStatus::Unverified,
+            version_range: None,
+            evidence_level: CapabilityEvidenceLevel::Fixture,
+            source: "synthetic".into(),
+            verified_at: None,
+            reason: None,
+        })
+        .unwrap();
+    let exported = service.export_diagnostics("test").unwrap();
+    let text = fs::read_to_string(exported.path).unwrap();
+    assert!(!text.contains("PRIVATE_EXPORT_SENTINEL"));
+    let doc: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(doc["capabilities"]["byAgent"][0]["agentId"], "agent-1");
+    assert_eq!(doc["capabilities"]["byAgent"][0]["unverified"], 1);
+}
+
+// ---------------------------------------------------------------------------
+// S01 real path resolution and Git worktree identity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn real_paths_resolve_case_and_junction_aliases_without_lowercasing() {
+    let root = TempRoot::new("s01-path-alias");
+    let service = open(&root);
+    seed_host(&service);
+
+    let target = root.path.join("项目 Alpha");
+    fs::create_dir_all(&target).expect("create real workspace directory");
+    let target_text = target.display().to_string();
+
+    let resolved = service.resolve_workspace_path(HOST_ID, &target_text);
+    assert_eq!(resolved.status, PathResolutionStatus::Resolved);
+    assert!(resolved.is_resolved());
+    let canonical = resolved
+        .path
+        .canonical_path
+        .clone()
+        .expect("canonical path");
+    assert!(
+        canonical.contains("项目 Alpha"),
+        "canonical path lost stored casing: {canonical}"
+    );
+    assert!(
+        !canonical.contains("项目 alpha"),
+        "canonical path was lowercased: {canonical}"
+    );
+
+    let first = service
+        .ensure_workspace_at_path(HOST_ID, &target_text)
+        .expect("register real workspace");
+
+    // Drive letter and separator alias.
+    let drive_alias = format!(
+        "{}:{}",
+        canonical[..1].to_lowercase(),
+        canonical[2..].replace('\\', "/")
+    );
+    let second = service
+        .ensure_workspace_at_path(HOST_ID, &drive_alias)
+        .expect("drive separator alias resolves");
+    assert_eq!(second.id, first.id, "drive/separator alias split identity");
+
+    // Directory-name case alias. NTFS resolves it to the stored casing.
+    let case_alias = target.with_file_name("项目 alpha");
+    let third = service
+        .ensure_workspace_at_path(HOST_ID, &case_alias.display().to_string())
+        .expect("case alias resolves");
+    assert_eq!(third.id, first.id, "case alias split workspace identity");
+
+    // A junction to the same directory must resolve to the same identity.
+    let junction = root.path.join("junction-alias");
+    create_junction(&junction, &target);
+    let junction_resolved =
+        service.resolve_workspace_path(HOST_ID, &junction.display().to_string());
+    assert_eq!(junction_resolved.status, PathResolutionStatus::Resolved);
+    assert_eq!(
+        junction_resolved.path.canonical_path.as_deref(),
+        Some(canonical.as_str())
+    );
+    let fourth = service
+        .ensure_workspace_at_path(HOST_ID, &junction.display().to_string())
+        .expect("junction alias resolves");
+    assert_eq!(fourth.id, first.id, "junction split workspace identity");
+
+    // Same canonical text on another host is a different workspace.
+    service.register_host(&Host::local("host-b")).unwrap();
+    let other_host = service
+        .ensure_workspace_at_path("host-b", &target_text)
+        .expect("same path on a different host");
+    assert_ne!(other_host.id, first.id);
+    assert_eq!(other_host.path.host_id, "host-b");
+
+    let page = service
+        .list_workspaces(&PageRequest::new(50, None))
+        .unwrap();
+    assert_eq!(page.total, 2, "aliases must not inflate workspace total");
+}
+
+#[test]
+fn missing_or_invalid_directories_are_reported_without_guessed_paths() {
+    let root = TempRoot::new("s01-path-missing");
+    let service = open(&root);
+    seed_host(&service);
+
+    let missing = root.path.join("missing-directory");
+    let resolved = service.resolve_workspace_path(HOST_ID, &missing.display().to_string());
+    assert_eq!(resolved.status, PathResolutionStatus::NotFound);
+    assert!(resolved.path.canonical_path.is_none());
+    assert!(resolved.repo_group_id.is_none());
+    let error = resolved.error.expect("missing directory has a reason");
+    assert_eq!(error.code, ErrorCode::NotFound);
+    assert!(!error.reason.contains("missing-directory"));
+    let register = service
+        .ensure_workspace_at_path(HOST_ID, &missing.display().to_string())
+        .expect_err("missing directory must not be registered");
+    assert_eq!(register.code, ErrorCode::InvalidArgument);
+
+    let file = root.path.join("not-a-directory.txt");
+    fs::write(&file, b"synthetic").unwrap();
+    let resolved = service.resolve_workspace_path(HOST_ID, &file.display().to_string());
+    assert_eq!(resolved.status, PathResolutionStatus::Invalid);
+    assert!(resolved.path.canonical_path.is_none());
+
+    let relative = service.resolve_workspace_path(HOST_ID, "relative\\path");
+    assert_eq!(relative.status, PathResolutionStatus::Invalid);
+    assert!(relative.path.canonical_path.is_none());
+
+    let empty_host = service.resolve_workspace_path("", &root.path.display().to_string());
+    assert_eq!(empty_host.status, PathResolutionStatus::Invalid);
+    assert!(empty_host.error.unwrap().reason.contains("hostId"));
+}
+
+#[test]
+fn missing_directory_does_not_block_viewing_existing_sessions() {
+    let root = TempRoot::new("s01-path-old-session");
+    let service = open(&root);
+    seed_host(&service);
+    service
+        .register_agent(&agent("agent-a", "synthetic", "Alpha"))
+        .unwrap();
+    let directory = root.path.join("old workspace");
+    fs::create_dir_all(&directory).unwrap();
+    let workspace = service
+        .ensure_workspace_at_path(HOST_ID, &directory.display().to_string())
+        .unwrap();
+    service
+        .ensure_session(&session_on("s-old", "agent-a", HOST_ID))
+        .unwrap();
+    service
+        .attach_workspace(&link("s-old", &workspace.id, SessionWorkspaceRole::Primary))
+        .unwrap();
+    assert_eq!(service.get_session("s-old").unwrap().workspaces.len(), 1);
+
+    fs::remove_dir_all(&directory).unwrap();
+    let resolved = service.resolve_workspace_path(HOST_ID, &directory.display().to_string());
+    assert_eq!(resolved.status, PathResolutionStatus::NotFound);
+    let detail = service
+        .get_session("s-old")
+        .expect("old session still readable");
+    assert_eq!(detail.session.id, "s-old");
+    assert_eq!(detail.workspaces[0].workspace_id, workspace.id);
+    let sessions = service
+        .list_sessions(&SessionQuery {
+            workspace_id: Some(workspace.id.clone()),
+            agent_id: None,
+            origin: None,
+            limit: 50,
+            cursor: None,
+        })
+        .unwrap();
+    assert_eq!(
+        sessions.total, 1,
+        "deleted path filtered the old session out"
+    );
+}
+
+#[test]
+fn real_git_worktrees_share_a_repo_group_but_stay_separate_workspaces() {
+    let root = TempRoot::new("s01-git-worktrees");
+    let main = root.path.join("Alpha 项目");
+    let linked = root.path.join("Beta 工作区");
+    fs::create_dir_all(&main).unwrap();
+    let git = |directory: &Path, args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git is available for the synthetic repository test");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&main, &["init"]);
+    git(
+        &main,
+        &[
+            "-c",
+            "user.name=MultiCLI Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "synthetic",
+        ],
+    );
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            linked.to_str().unwrap(),
+            "-b",
+            "fixture-worktree",
+        ],
+    );
+
+    let service = open(&root);
+    seed_host(&service);
+    let main_resolved = service.resolve_workspace_path(HOST_ID, &main.display().to_string());
+    let linked_resolved = service.resolve_workspace_path(HOST_ID, &linked.display().to_string());
+    assert_eq!(main_resolved.status, PathResolutionStatus::Resolved);
+    assert_eq!(linked_resolved.status, PathResolutionStatus::Resolved);
+    assert_eq!(main_resolved.git_status, GitStatus::Repository);
+    assert_eq!(linked_resolved.git_status, GitStatus::Repository);
+
+    // A workspace opened below the checkout root belongs to the same
+    // worktree; worktreeId must not be derived from the subdirectory.
+    let nested = main.join("packages").join("app");
+    fs::create_dir_all(&nested).unwrap();
+    let nested_resolved = service.resolve_workspace_path(HOST_ID, &nested.display().to_string());
+    assert_eq!(nested_resolved.git_status, GitStatus::Repository);
+    assert_eq!(
+        nested_resolved.repo_group_id, main_resolved.repo_group_id,
+        "nested workspace lost its repo group"
+    );
+    assert_eq!(
+        nested_resolved.worktree_id, main_resolved.worktree_id,
+        "nested workspace became a separate worktree"
+    );
+
+    let main_group = main_resolved
+        .repo_group_id
+        .clone()
+        .expect("main repo group");
+    let linked_group = linked_resolved
+        .repo_group_id
+        .clone()
+        .expect("worktree repo group");
+    assert_eq!(
+        main_group, linked_group,
+        "worktrees must share a repo group"
+    );
+    assert_ne!(
+        main_resolved.worktree_id, linked_resolved.worktree_id,
+        "each checkout must keep its own worktree identity"
+    );
+    assert!(!main_group.contains("Alpha"), "repo group leaked a path");
+    assert!(!main_group.contains(&root.path.display().to_string()));
+
+    let main_workspace = service
+        .ensure_workspace_at_path(HOST_ID, &main.display().to_string())
+        .unwrap();
+    let linked_workspace = service
+        .ensure_workspace_at_path(HOST_ID, &linked.display().to_string())
+        .unwrap();
+    assert_ne!(main_workspace.id, linked_workspace.id);
+    assert_eq!(
+        main_workspace.repo_group_id.as_deref(),
+        Some(main_group.as_str())
+    );
+    assert_eq!(
+        linked_workspace.repo_group_id.as_deref(),
+        Some(main_group.as_str())
+    );
+    let page = service
+        .list_workspaces(&PageRequest::new(50, None))
+        .unwrap();
+    assert_eq!(page.total, 2, "two worktrees must be two workspaces");
+}
+
+#[test]
+fn capability_pages_are_stable_and_use_the_unique_scope() {
+    let root = TempRoot::new("s01-capability-page");
+    let service = open(&root);
+    seed_host(&service);
+    service
+        .register_agent(&agent("agent-a", "synthetic", "Alpha"))
+        .unwrap();
+    for (index, name) in [
+        CapabilityName::InstalledDetection,
+        CapabilityName::ProcessDetection,
+        CapabilityName::HistoryRead,
+        CapabilityName::HistorySearch,
+        CapabilityName::Resume,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut capability = capability_for("agent-a", None, name);
+        capability.status = if index % 3 == 0 {
+            CapabilityStatus::Supported
+        } else if index % 3 == 1 {
+            CapabilityStatus::Unsupported
+        } else {
+            CapabilityStatus::Unverified
+        };
+        capability.evidence_level = if index % 2 == 0 {
+            CapabilityEvidenceLevel::Document
+        } else {
+            CapabilityEvidenceLevel::Fixture
+        };
+        service.declare_capability(&capability).unwrap();
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut cursor = None;
+    let mut pages = 0;
+    loop {
+        let page = service
+            .list_capabilities_page(&CapabilityQuery {
+                agent_id: "agent-a".to_string(),
+                limit: 2,
+                cursor,
+            })
+            .unwrap();
+        assert_eq!(page.total, 5);
+        assert!(page.items.len() <= 2);
+        for capability in page.items {
+            assert!(seen.insert(capability.name.as_str().to_string()));
+        }
+        pages += 1;
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(pages, 3);
+    assert_eq!(seen.len(), 5);
+
+    let other_agent = service
+        .list_capabilities_page(&CapabilityQuery {
+            agent_id: "agent-missing".to_string(),
+            limit: 2,
+            cursor: None,
+        })
+        .unwrap();
+    assert_eq!(other_agent.total, 0);
+    assert!(other_agent.items.is_empty());
+    assert!(other_agent.next_cursor.is_none());
+
+    let empty_agent = service
+        .list_capabilities_page(&CapabilityQuery {
+            agent_id: "   ".to_string(),
+            limit: 2,
+            cursor: None,
+        })
+        .unwrap_err();
+    assert_eq!(empty_agent.code, ErrorCode::InvalidArgument);
+}
+
+#[test]
+fn capability_scope_is_part_of_the_page_order() {
+    let root = TempRoot::new("s01-capability-scope");
+    let service = open(&root);
+    seed_host(&service);
+    service
+        .register_agent(&agent("agent-a", "synthetic", "Alpha"))
+        .unwrap();
+    service
+        .register_installation(&installation("install-a", "agent-a", HOST_ID, "default"))
+        .unwrap();
+    service
+        .declare_capability(&capability_for(
+            "agent-a",
+            None,
+            CapabilityName::StructuredChat,
+        ))
+        .unwrap();
+    service
+        .declare_capability(&capability_for(
+            "agent-a",
+            Some("install-a"),
+            CapabilityName::StructuredChat,
+        ))
+        .unwrap();
+    service
+        .declare_capability(&capability_for(
+            "agent-a",
+            None,
+            CapabilityName::HistoryRead,
+        ))
+        .unwrap();
+
+    let mut keys = BTreeSet::new();
+    let mut cursor = None;
+    let mut pages = 0;
+    loop {
+        let page = service
+            .list_capabilities_page(&CapabilityQuery {
+                agent_id: "agent-a".to_string(),
+                limit: 2,
+                cursor,
+            })
+            .unwrap();
+        assert_eq!(page.total, 3);
+        for capability in page.items {
+            let key = format!(
+                "{}|{}",
+                capability.name.as_str(),
+                capability.installation_id.unwrap_or_default()
+            );
+            assert!(keys.insert(key), "capability page repeated a scope");
+        }
+        pages += 1;
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(pages, 2);
+    assert_eq!(keys.len(), 3);
+    assert!(keys.contains("structuredChat|"));
+    assert!(keys.contains("structuredChat|install-a"));
+    assert!(keys.contains("historyRead|"));
 }

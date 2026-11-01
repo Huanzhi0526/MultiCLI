@@ -14,6 +14,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Rust check failed' }
     }
     if ($Scope -in @('Test','All')) {
+        & corepack pnpm exec vitest run src/multicli
+        if ($LASTEXITCODE -ne 0) { throw 'MultiCLI frontend tests failed' }
         $multicliSavedProfile = $env:MULTICLI_PROFILE
         try {
             $env:MULTICLI_PROFILE = 'test'
@@ -21,6 +23,8 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'MultiCLI domain tests failed' }
             & cargo test --locked --manifest-path src-tauri/Cargo.toml --lib multicli_bootstrap -- --test-threads=1
             if ($LASTEXITCODE -ne 0) { throw 'MultiCLI native tests failed' }
+            & cargo test --locked --manifest-path src-tauri/Cargo.toml --example multicli_fixture -- --test-threads=1
+            if ($LASTEXITCODE -ne 0) { throw 'MultiCLI fixture protection tests failed' }
         } finally {
             if ($null -eq $multicliSavedProfile) { Remove-Item Env:MULTICLI_PROFILE -ErrorAction SilentlyContinue }
             else { $env:MULTICLI_PROFILE = $multicliSavedProfile }

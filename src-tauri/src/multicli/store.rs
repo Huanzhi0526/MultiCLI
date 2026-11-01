@@ -453,7 +453,9 @@ fn resolve_existing_ancestor(path: &Path) -> Result<PathBuf, AppError> {
                 })),
         );
     }
-    let mut resolved = canonical;
+    // Expose the normalized path (no Windows `\\?\` verbatim prefix) so the
+    // diagnostics response and UI show a path the user can actually paste.
+    let mut resolved = PathBuf::from(super::path::canonical_text(&canonical));
     for component in suffix.iter().rev() {
         resolved.push(component);
     }

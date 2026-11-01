@@ -1,0 +1,186 @@
+/**
+ * Wire types for the frozen MultiCLI domain contract
+ * (`docs/contracts/domain.schema.json`). Field names are camelCase on the
+ * IPC boundary; the UI never invents fields the backend does not return.
+ */
+
+export type SessionOrigin = "managed" | "external-observed" | "history-only";
+export type RunTransport = "native" | "acp" | "pty";
+export type RunOwnership = "managed" | "external-observed";
+export type ExecutionStatus =
+  | "starting"
+  | "running"
+  | "stopping"
+  | "exited"
+  | "failed"
+  | "unknown";
+export type InteractionStatus =
+  | "working"
+  | "awaiting-permission"
+  | "awaiting-input"
+  | "idle"
+  | "unknown";
+export type EvidenceLevel = "observed" | "inferred";
+export type CapabilityName =
+  | "installedDetection"
+  | "processDetection"
+  | "historyRead"
+  | "historySearch"
+  | "resume"
+  | "structuredChat"
+  | "permissionFlow"
+  | "pty"
+  | "quotaRead";
+export type CapabilityStatus = "supported" | "unsupported" | "unverified";
+export type CapabilityEvidenceLevel = "document" | "fixture" | "live";
+
+export type ErrorCode =
+  | "unsupported"
+  | "unverified"
+  | "invalid_argument"
+  | "not_found"
+  | "access_denied"
+  | "conflict"
+  | "timeout"
+  | "cancelled"
+  | "io"
+  | "database"
+  | "protocol";
+
+export interface AppError {
+  code: ErrorCode;
+  message: string;
+  retryable: boolean;
+  details: Record<string, unknown>;
+}
+
+export interface HostPath {
+  hostId: string;
+  displayPath: string;
+  canonicalPath: string | null;
+}
+
+export interface AgentDefinition {
+  id: string;
+  vendor: string;
+  displayName: string;
+}
+
+export interface Workspace {
+  id: string;
+  path: HostPath;
+  repoGroupId: string | null;
+  worktreeId: string | null;
+}
+
+export interface Session {
+  id: string;
+  agentId: string;
+  hostId: string;
+  sourceNamespace: string;
+  nativeId: string | null;
+  origin: SessionOrigin;
+  title: string;
+}
+
+export interface SessionWorkspace {
+  sessionId: string;
+  workspaceId: string;
+  role: "primary" | "related";
+  evidence: string;
+}
+
+export interface Run {
+  id: string;
+  sessionId: string;
+  installationId: string | null;
+  transport: RunTransport;
+  ownership: RunOwnership;
+  startedAt: string | null;
+  endedAt: string | null;
+  executionStatus: ExecutionStatus;
+  interactionStatus: InteractionStatus;
+  evidenceLevel: EvidenceLevel;
+  evidence: string | null;
+}
+
+export interface Message {
+  id: string;
+  sessionId: string;
+  runId: string | null;
+  nativeEventId: string | null;
+  sourceKey: string;
+  seq: number;
+  kind: string;
+  content: Record<string, unknown>;
+  sourceRef: string | null;
+  observedAt: string;
+}
+
+export interface Capability {
+  agentId: string;
+  installationId: string | null;
+  name: CapabilityName;
+  status: CapabilityStatus;
+  versionRange: string | null;
+  evidenceLevel: CapabilityEvidenceLevel;
+  source: string;
+  verifiedAt: string | null;
+  reason: string | null;
+}
+
+export interface WorkspaceListItem {
+  workspace: Workspace;
+  sessionCount: number;
+}
+
+export interface AgentListItem {
+  agent: AgentDefinition;
+  installationCount: number;
+  sessionCount: number;
+}
+
+export interface SessionSummary {
+  session: Session;
+  primaryWorkspaceId: string | null;
+  workspaceIds: string[];
+  messageCount: number;
+  runCount: number;
+}
+
+export interface SessionDetail {
+  session: Session;
+  workspaces: SessionWorkspace[];
+  runs: Run[];
+  messages: Message[];
+  messageCount: number;
+  runCount: number;
+}
+
+export interface Page<T> {
+  items: T[];
+  nextCursor: string | null;
+  total: number;
+}
+
+export interface PageQuery {
+  limit: number;
+  cursor?: string | null;
+}
+
+export interface SessionQuery extends PageQuery {
+  workspaceId?: string | null;
+  agentId?: string | null;
+  origin?: SessionOrigin | null;
+}
+
+export interface CapabilityQuery extends PageQuery {
+  agentId: string;
+}
+
+export interface DiagnosticsExport {
+  path: string;
+  createdAt: string;
+}
+
+export const MAX_PAGE_LIMIT = 200;

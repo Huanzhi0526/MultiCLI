@@ -1,8 +1,16 @@
 # CC GUI 界面与交互规范（UI/UX Spec）
 
-## MultiCLI S00 派生说明
+## MultiCLI S01 派生说明
 
-当前入口为 `src/multicli/BaselineApp.tsx`，仅展示原生返回的环境与数据目录，并允许手动运行真实 Windows shell PTY 探针。按钮运行期间禁用，结果使用 aria-live 播报，失败展示原始错误；初始状态为未运行。文案通过现有 i18next 机制及 `src/i18n/multicli.ts` 提供。此窗口是 S00 诊断脚手架，不代表产品导航或终端验收。未启用上游 App/bootstrap 的插件、遥测、远程和更新入口。S01 替换成产品导航后同步维护本文。
+当前入口为 `src/multicli/App.tsx`（`src/main.tsx` 直接挂载），替换 S00 的 `BaselineApp` 诊断脚手架。S00 的 `multicli_baseline_info`、`multicli_shell_smoke` 仍保留为开发诊断命令，但不再出现在产品页面。
+
+页面是三栏只读导航：左栏在「工作区 / Agent」两个入口间切换，中栏是两入口共用的会话列表，右栏是共用的会话详情。同一会话从任一入口打开必须显示同一个 `sessionId`、同一组消息与 `messageCount` / `runCount`；筛选（工作区、Agent、来源）变化时清空选中会话并重置分页游标，已加载页按 id 去重、不重排。列表请求带递增 token，旧请求晚到不得覆盖新筛选的结果；组件卸载/切换时使 token 失效。列表分别呈现加载中、空、真实 `AppError`（code / message / retryable / details）与重试、以及「会话不存在」；失败不显示为空数组，空库不显示演示行。首屏失败显示错误与重试；「加载更多」失败保留已加载行，在列表底部或能力区给出重试入口。刷新时按钮禁用、列表显示加载态；刷新失败保留旧行并在上方显示错误，不把旧数据清空。
+
+详情把 `origin`（managed / external-observed / history-only）、Run 的 `transport`（native / acp / pty）、`ownership`、`executionStatus`、`interactionStatus` 与 `evidenceLevel` 分开显示；能力 `status`（supported / unsupported / unverified）与证据层 `document` / `fixture` / `live` 用两组独立徽标，原因缺失写「未说明原因」，未确认字段写「未取得」，不把 unverified/fixture/NOT_RUN 画成 supported。原生 `nativeId`、`startedAt` 等缺失字段显示「未取得」，不留空白冒充已确认。
+
+页头「导出诊断」按钮调用产品 IPC，成功显示真实本地文件路径与 `createdAt`，失败显示真实 `AppError` 并允许重试；文件只含白名单计数、版本与能力摘要，不含消息、提示词、命令、原生 id、账号、路径或凭据。导出目录由后端固定为 `<dataRoot>/diagnostics`，前端不能指定输出目录。`document.documentElement.dataset.appMounted = "1"` 的 boot watchdog 标记保留。
+
+文案通过现有 i18next 机制及 `src/i18n/multicli.ts` 提供。未启用上游 App/bootstrap 的插件、遥测、远程和更新入口。测试数据只能由 `src-tauri/examples/multicli_fixture.rs` 显式写入 test profile 或 scratch 合成根，正式启动不生成演示数据。
 
 > **版本**：v0.1（首版，随实现增量维护）
 > **适用范围**：`src/styles`、`src/components`、`src/features` 中所有用户可见的界面与交互
@@ -316,6 +324,7 @@ const feedback = useRunningFeedback(store.loading);
 | 入口 | 文件 | 反馈接入 | 备注 |
 |---|---|---|---|
 | 变更（git）刷新 | `src/features/git/ChangesPanelHeader.tsx` | `useActionFeedback({ spin: true })` | **参考实现**；pull/push 只做 click → 对号 |
+| MultiCLI 会话列表刷新 | `src/multicli/components.tsx`（`SessionList`）、`src/multicli/App.tsx` | 文字按钮 disabled + 列表面板自身加载态（不进 §4.1 图标反馈） | 重读当前筛选第一页，并重读已选会话详情与能力；失败保留旧列表并在面板内显示真实 `AppError` 与重试。筛选变化是重置游标的一次重新读取，不走此按钮 |
 | 文件树刷新 | `src/features/files/FileTreeRow.tsx` | `useRunningFeedback(filesStore.refreshing)` | 入口在工作区根行（合成根节点），随该行悬停出现（同该行「添加到聊天」加号）；刷新可能由别处触发，故走状态驱动 |
 | 插件市场索引 | `src/features/plugins/hub/PluginMarketView.tsx` | `useActionFeedback` | 图标按钮位于筛选工具条（分类 chips + 排序 + 搜索）右侧；`isFailure` 读 `marketplaceStore.error`。一次刷新同时重读索引与 `featured.json`（精选是软依赖：拉不到只清空轮播，不写 `error`） |
 | 插件重新加载 | `src/features/plugins/hub/PluginInstalledRow.tsx` | `useActionFeedback` | 成功后该行转为健康态、按钮消失 |

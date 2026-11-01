@@ -1,4 +1,4 @@
-# 实际源码映射（S00）
+# 实际源码映射（S00–S01）
 
 固定上游 `6c46345a727e7c1b57e0dacecb4fe063d88ee8dc`；以下路径相对 app。现存文件与拟新增路径明确分开。
 
@@ -13,10 +13,14 @@
 | CodeBuddy | src-tauri/src/engine/codebuddy.rs | 不能凭文件名认定已具备目标 ACP 权限链路；S05 单独验证/实现 |
 | PTY | src-tauri/src/terminal.rs、engine/job.rs；src/features/terminal/TerminalView.tsx、store.ts | 保留后端/组件；S00 原生探针在 multicli_bootstrap，S04 再整合生命周期 |
 | 原始历史 | src-tauri/src/history/scanner.rs、reader.rs、search.rs、edit.rs | 解析可参考；edit 不可注册；无启动自动扫描 |
-| 前端入口 | src/main.tsx、src/multicli/BaselineApp.tsx | 临时真实诊断页，S01 实现产品导航 |
+| 前端入口 | src/main.tsx → src/multicli/App.tsx | 当前产品导航；BaselineApp 保留未挂载 |
 | 原聊天/设置 | src/features/chat/ChatPage.tsx、store.ts；src/features/settings/SettingsPage.tsx | 保留组件，当前未挂载；不可整体恢复超范围入口 |
 | 原前端副作用 | src/bootstrap.tsx、src/App.tsx、src/lib/analytics.ts | 保留供映射，当前入口不导入/运行 |
 | 用量参考 | src-tauri/src/usage_limits.rs、usage_stats.rs、engine/codex_usage.rs | S06 对照官方接口，不能混成订阅余额 |
 | 远程/电脑控制/插件 | src-tauri/src/web.rs、relay.rs、computer_use.rs、plugins/、dsh_host.rs | 不在当前 IPC 注册表或启动链；没有本版实现任务 |
 
-S01 数据层现已存在：`src-tauri/src/multicli/{domain,error,store,repo,service}.rs`，公开入口 `MultiCliService`，数据库 `multicli.db`，schema version 2。`mod.rs` 公开类型/服务，`tests.rs` 包含正式回归。产品 IPC 和导航尚未实现；`src-tauri/src/multicli/ipc.rs` 与 `src/multicli/{domain,navigation,...}` 是下一阶段包的拟新增路径，不可假定已存在。正式 IPC/领域约定见 docs/contracts/；旧命令没有自动获得 MultiCLI 授权。
+S01 已验收模块：`src-tauri/src/multicli/{domain,error,store,repo,service,path,diagnostics}.rs`，公开入口 MultiCliService，独立 multicli.db、schema version 2。path.rs 处理真实路径/worktree，diagnostics.rs 匿名白名单导出，tests.rs 正式回归。
+
+六个产品 IPC、懒初始化与失败重试在 `src-tauri/src/multicli_bootstrap.rs`，没有 multicli/ipc.rs。前端为 `src/multicli/{App.tsx,components.tsx,api.ts,types.ts,navigation.ts,usePagedResource.ts}`，文案 `src/i18n/multicli.ts`，不走旧 src/App.tsx。显式合成工具 `src-tauri/examples/multicli_fixture.rs` 不由产品启动调用。冻结 schema 未改。
+
+S02 模块尚不存在，预留 `src-tauri/src/multicli/discovery/` 与 `src/multicli/discovery/`。现有 ProcessIdentity、ProcessObservation、RunProcessLink 和服务持久化入口可复用；新 IPC 仍集中 multicli_bootstrap，禁止恢复上游启动/历史扫描或接管外部进程。

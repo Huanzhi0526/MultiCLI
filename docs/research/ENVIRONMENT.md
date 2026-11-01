@@ -52,3 +52,5 @@ ENV-R1 结果：归档长度与 SHA256 校验通过，所选项目内 perl.exe �
 ## 最终验证回填
 
 18:28 Rust locked check、3 项原生测试和 NSIS 构建通过；普通用户桌面、dev/test/prod 数据/WebView 隔离、安装版启动及 PTY 通过。最终独立结果见 ../execution/S00-ACCEPTANCE.md。CI 尚未运行，原始安装/构建日志留在 scratch。
+
+Git 最终同步：本机 Git 认证已由用户完成，S00 提交 `6927a033075fbfc0a7b6c7e630711cb6309eed4a` 推送 origin/main 并核对远端。派生源自完整可达的固定上游历史，首次缺历史对象的问题已修复；不推送 upstream。

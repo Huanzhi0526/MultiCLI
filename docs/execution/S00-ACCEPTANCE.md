@@ -43,3 +43,7 @@ release exe SHA256：4869C14C0C34EE211256EC50BDE40BCF5C3ADB743D62199463B2E2F27D8
 - 原始日志：logs/deferred-rust.log、deferred-test.log、deferred-package.log；UI 原始文本：prod/dev/test/installed-desktop-ui.json；进程/网络/数据保护：相应 *-processes.json、prod-desktop-network.json、protected-data-before/after.json，仅在 scratch/s00。
 
 S00 允许进入 S01-01；先保存本批源码并核实远端，再给用户完整手动派工卡。
+
+## Git 保存与同步
+
+S00 源码提交：`6927a033075fbfc0a7b6c7e630711cb6309eed4a`，已推送用户仓库 main，并于 2026-11-01T19:55:23.7316691+08:00 用 ls-remote 核对。首次认证后发现派生仓库缺少旧历史 blob，随后从固定上游 v1.2.0 补齐历史，验证 115,603 个可达对象 missing=0 后成功推送。1470 个受测源码/配置/资源的工作树 SHA256 与 Git 规范化对象均已核实。后续状态补录仅改文档，不改变受测产品源码或安装包。

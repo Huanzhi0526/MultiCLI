@@ -24,9 +24,9 @@
     // Storage can be unavailable in restricted webviews; keep the default.
   }
   var bootMessages = {
-    zh: ["正在启动 CC GUI…", "CC GUI 启动失败", "可以重新加载应用再试一次。", "重新加载"],
-    en: ["Starting CC GUI…", "Failed to start CC GUI", "Reload the app to try again.", "Reload"],
-    ko: ["CC GUI 시작 중…", "CC GUI를 시작하지 못했습니다", "앱을 다시 불러와 재시도하세요.", "다시 불러오기"],
+    zh: ["正在启动 MultiCLI…", "MultiCLI 启动失败", "可以重新加载应用再试一次。", "重新加载"],
+    en: ["Starting MultiCLI…", "Failed to start MultiCLI", "Reload the app to try again.", "Reload"],
+    ko: ["MultiCLI 시작 중…", "MultiCLI를 시작하지 못했습니다", "앱을 다시 불러와 재시도하세요.", "다시 불러오기"],
   };
   var messages = bootMessages[language];
   document.documentElement.lang = language === "zh" ? "zh-CN" : language;

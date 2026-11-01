@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "properties": {
+    "code": {
+      "type": "string",
+      "enum": [
+        "unsupported",
+        "unverified",
+        "invalid_argument",
+        "not_found",
+        "access_denied",
+        "conflict",
+        "timeout",
+        "cancelled",
+        "io",
+        "database",
+        "protocol"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "details": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "code",
+    "message",
+    "retryable",
+    "details"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:multicli:error:1"
+}

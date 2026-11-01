@@ -50,6 +50,7 @@ pub mod usage_limits;
 pub mod usage_stats;
 pub mod web;
 pub mod window_state;
+pub mod multicli_bootstrap;
 
 use std::sync::Arc;
 use tauri::Emitter;
@@ -77,8 +78,16 @@ pub struct AppState {
     pub worktree_creations: git_worktree::CreationRegistry,
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    multicli_bootstrap::run();
+}
+
+// Retained upstream startup for source tracing, deliberately not reachable
+// from the binary or IPC. MultiCLI opens capabilities batch by batch.
+// Excluded from compilation: its preview registration needs the disabled asset protocol.
+#[cfg(any())]
+#[allow(dead_code)]
+fn upstream_run_disabled() {
     paths::ensure_dirs().expect("failed to create app home");
     // MCP server mode: engine CLIs spawn this binary as a computer-use MCP
     // child process (`--mcp-config`). stdout is the protocol channel, so no

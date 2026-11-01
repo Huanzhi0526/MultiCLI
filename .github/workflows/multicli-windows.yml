@@ -1,0 +1,28 @@
+name: MultiCLI Windows checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Restore locked frontend dependencies
+        shell: pwsh
+        run: corepack pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify and build unsigned user installer
+        shell: pwsh
+        run: ./scripts/multicli/verify.ps1 -Scope All
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multicli-windows-x64-unsigned
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

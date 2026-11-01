@@ -1,0 +1,1163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:multicli:domain:1",
+  "$defs": {
+    "HostPath": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonicalPath": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "hostId",
+        "displayPath",
+        "canonicalPath"
+      ],
+      "additionalProperties": false
+    },
+    "Host": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "local-windows"
+        },
+        "pathStyle": {
+          "const": "windows"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "pathStyle"
+      ],
+      "additionalProperties": false
+    },
+    "AgentDefinition": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "vendor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "vendor",
+        "displayName"
+      ],
+      "additionalProperties": false
+    },
+    "AgentInstallation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "executable": {
+          "$ref": "#/$defs/HostPath"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configProfileId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "hostId",
+        "agentId",
+        "executable",
+        "version",
+        "configProfileId"
+      ],
+      "additionalProperties": false
+    },
+    "Workspace": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "$ref": "#/$defs/HostPath"
+        },
+        "repoGroupId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worktreeId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "repoGroupId",
+        "worktreeId"
+      ],
+      "additionalProperties": false
+    },
+    "Session": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceNamespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nativeId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "managed",
+            "external-observed",
+            "history-only"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "agentId",
+        "hostId",
+        "sourceNamespace",
+        "nativeId",
+        "origin",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "SessionWorkspace": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "related"
+          ]
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "workspaceId",
+        "role",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "ProcessIdentity": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "creationTime": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "hostId",
+        "pid",
+        "creationTime"
+      ],
+      "additionalProperties": false
+    },
+    "Run": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "installationId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "native",
+            "acp",
+            "pty"
+          ]
+        },
+        "ownership": {
+          "type": "string",
+          "enum": [
+            "managed",
+            "external-observed"
+          ]
+        },
+        "startedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "executionStatus": {
+          "type": "string",
+          "enum": [
+            "starting",
+            "running",
+            "stopping",
+            "exited",
+            "failed",
+            "unknown"
+          ]
+        },
+        "interactionStatus": {
+          "type": "string",
+          "enum": [
+            "working",
+            "awaiting-permission",
+            "awaiting-input",
+            "idle",
+            "unknown"
+          ]
+        },
+        "evidenceLevel": {
+          "type": "string",
+          "enum": [
+            "observed",
+            "inferred"
+          ]
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "sessionId",
+        "installationId",
+        "transport",
+        "ownership",
+        "startedAt",
+        "endedAt",
+        "executionStatus",
+        "interactionStatus",
+        "evidenceLevel",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "ProcessObservation": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/ProcessIdentity"
+        },
+        "parentIdentity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProcessIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "executable": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostPath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "redactedCommand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "identity",
+        "parentIdentity",
+        "executable",
+        "redactedCommand",
+        "observedAt"
+      ],
+      "additionalProperties": false
+    },
+    "RunProcessLink": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "processIdentity": {
+          "$ref": "#/$defs/ProcessIdentity"
+        },
+        "linkKind": {
+          "type": "string",
+          "enum": [
+            "owned",
+            "observed",
+            "inferred"
+          ]
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "runId",
+        "processIdentity",
+        "linkKind",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "SessionRelation": {
+      "type": "object",
+      "properties": {
+        "parentSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "childSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "os-parent",
+            "explicit-delegation",
+            "inferred"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "parentSessionId",
+        "childSessionId",
+        "kind",
+        "confidence",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "Capability": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "installationId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string",
+          "enum": [
+            "installedDetection",
+            "processDetection",
+            "historyRead",
+            "historySearch",
+            "resume",
+            "structuredChat",
+            "permissionFlow",
+            "pty",
+            "quotaRead"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "supported",
+            "unsupported",
+            "unverified"
+          ]
+        },
+        "versionRange": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidenceLevel": {
+          "type": "string",
+          "enum": [
+            "document",
+            "fixture",
+            "live"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verifiedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "agentId",
+        "installationId",
+        "name",
+        "status",
+        "versionRange",
+        "evidenceLevel",
+        "source",
+        "verifiedAt",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryCursor": {
+      "type": "object",
+      "properties": {
+        "sourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fileIdentity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parserVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trailingFragment": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceId",
+        "fileIdentity",
+        "size",
+        "offset",
+        "parserVersion",
+        "trailingFragment"
+      ],
+      "additionalProperties": false
+    },
+    "HistorySource": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "$ref": "#/$defs/HostPath"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "formatVersion": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "hostId",
+        "profileId",
+        "agentId",
+        "path",
+        "enabled",
+        "formatVersion"
+      ],
+      "additionalProperties": false
+    },
+    "Message": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nativeEventId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {
+          "type": "object"
+        },
+        "sourceRef": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "sessionId",
+        "runId",
+        "nativeEventId",
+        "sourceKey",
+        "seq",
+        "kind",
+        "content",
+        "sourceRef",
+        "observedAt"
+      ],
+      "additionalProperties": false
+    },
+    "PermissionRequest": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nativeRequestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "allow-once",
+                  "allow-session",
+                  "deny",
+                  "other"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "answered",
+            "expired",
+            "cancelled"
+          ]
+        }
+      },
+      "required": [
+        "requestId",
+        "runId",
+        "nativeRequestId",
+        "options",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "AccountProfile": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "officialId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alias": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authMode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identityConfirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "officialId",
+        "alias",
+        "authMode",
+        "identityConfirmed"
+      ],
+      "additionalProperties": false
+    },
+    "QuotaPool": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accountProfileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerPoolId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "accountProfileId",
+        "providerPoolId",
+        "unit",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "QuotaSnapshot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accountProfileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "poolId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "window": {
+          "type": "string",
+          "minLength": 1
+        },
+        "used": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remaining": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resetAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fetchedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "stale",
+            "error",
+            "unavailable"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "accountProfileId",
+        "poolId",
+        "window",
+        "used",
+        "remaining",
+        "unit",
+        "resetAt",
+        "source",
+        "fetchedAt",
+        "state",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "UsageSample": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accountProfileId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputTokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputTokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheTokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "measurement": {
+          "type": "string",
+          "enum": [
+            "official-quota",
+            "api-billing",
+            "cli-reported",
+            "local-estimate"
+          ]
+        },
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "sessionId",
+        "runId",
+        "accountProfileId",
+        "model",
+        "inputTokens",
+        "outputTokens",
+        "cacheTokens",
+        "cost",
+        "currency",
+        "measurement",
+        "sourceKey",
+        "observedAt"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

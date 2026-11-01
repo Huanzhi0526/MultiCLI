@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("Linux release installs the GBM development library before linking", () => {
-  const workflow = read(".github/workflows/release.yml");
-  const linuxJob = workflow.split("  build_linux:")[1].split("  build_windows:")[0];
-  assert.match(linuxJob, /sudo apt-get install[^\n]*\blibgbm-dev\b/);
+test("MultiCLI enables only its Windows verification workflow, without inherited publication jobs", () => {
+  const workflows = readdirSync(new URL("../.github/workflows/", import.meta.url)).filter((name) => /\.ya?ml$/.test(name));
+  assert.deepEqual(workflows, ["multicli-windows.yml"]);
+  const workflow = read(".github/workflows/multicli-windows.yml");
+  assert.match(workflow, /runs-on: windows-latest/);
+  assert.match(workflow, /contents: read/);
+  assert.doesNotMatch(workflow, /contents: write|pull-requests: write|secrets\.|create-release|gh release/);
 });
 
 test("Windows MSVC embeds the manifest for library tests as well as the application", () => {
@@ -26,18 +29,16 @@ test("Windows MSVC embeds the manifest for library tests as well as the applicat
   assert.match(manifest, /publicKeyToken="6595b64144ccf1df"/);
 });
 
-test("Windows keeps explicit Rust coverage: release runs the lib suite, the artifact workflow compiles every target", () => {
-  // windows-latest cannot load the computer-use test EXEs (0xc0000139), so
-  // build-windows-artifact.yml is deliberately compile-only — it must still
-  // compile the integration targets, and it must not hide failures with
-  // continue-on-error. release.yml keeps executing the lib tests on Windows.
-  // Keep this split in sync with both workflow comments.
-  const release = read(".github/workflows/release.yml");
-  assert.match(release, /run: cargo test --manifest-path src-tauri\/Cargo\.toml --lib/);
-  assert.doesNotMatch(release, /continue-on-error: true/);
-  const artifact = read(".github/workflows/build-windows-artifact.yml");
-  assert.match(artifact, /run: cargo test --manifest-path src-tauri\/Cargo\.toml --tests --no-run/);
-  assert.doesNotMatch(artifact, /continue-on-error: true/);
+test("Windows verification requires locked Rust checks and real MultiCLI tests before packaging", () => {
+  const workflow = read(".github/workflows/multicli-windows.yml");
+  assert.match(workflow, /verify\.ps1 -Scope All/);
+  assert.doesNotMatch(workflow, /continue-on-error: true/);
+  const verify = read("scripts/multicli/verify.ps1");
+  assert.match(verify, /cargo check --locked/);
+  assert.match(verify, /cargo test --locked.*--lib multicli_bootstrap/);
+  assert.match(verify, /tauri build --bundles nsis --no-sign/);
+  assert.ok(verify.indexOf("cargo test") < verify.indexOf("tauri build"));
+  assert.match(verify, /throw 'MultiCLI native tests failed'/);
 });
 
 // Packaged builds apply their CSP plus a build step that tags every inline

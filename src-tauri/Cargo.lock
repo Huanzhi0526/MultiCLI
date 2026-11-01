@@ -679,57 +679,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ccgui-next"
-version = "1.2.0"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "dirs 6.0.0",
- "dunce",
- "enigo",
- "fs2",
- "futures-util",
- "git2",
- "ignore",
- "image",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "openssl-sys",
- "parking_lot",
- "portable-pty",
- "regex",
- "reqwest 0.12.28",
- "rmcp",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-process",
- "tauri-plugin-updater",
- "tokio",
- "tokio-tungstenite 0.26.2",
- "toml 0.8.2",
- "toml_edit 0.22.27",
- "trash",
- "uuid",
- "which",
- "windows 0.61.3",
- "winreg 0.55.0",
- "xcap",
- "zstd",
-]
-
-[[package]]
 name = "cesu8"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2312,12 +2261,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-range"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21dec9db110f5f872ed9699c3ecf50cf16f423502706ba5c72462e28d3157573"
-
-[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3342,6 +3285,57 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "multicli"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "dirs 6.0.0",
+ "dunce",
+ "enigo",
+ "fs2",
+ "futures-util",
+ "git2",
+ "ignore",
+ "image",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "openssl-sys",
+ "parking_lot",
+ "portable-pty",
+ "regex",
+ "reqwest 0.12.28",
+ "rmcp",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-process",
+ "tauri-plugin-updater",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "toml 0.8.2",
+ "toml_edit 0.22.27",
+ "trash",
+ "uuid",
+ "which",
+ "windows 0.61.3",
+ "winreg 0.55.0",
+ "xcap",
+ "zstd",
 ]
 
 [[package]]
@@ -5816,7 +5810,6 @@ dependencies = [
  "gtk",
  "heck 0.5.0",
  "http",
- "http-range",
  "jni 0.21.1",
  "libc",
  "log",

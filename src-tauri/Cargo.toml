@@ -1,7 +1,7 @@
 [package]
-name = "ccgui-next"
-version = "1.2.0"
-description = "CC GUI - multi-CLI AI chat desktop"
+name = "multicli"
+version = "0.1.0"
+description = "MultiCLI local Windows CLI workbench"
 edition = "2021"
 rust-version = "1.90"
 
@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "unstable", "macos-private-api"] }
+tauri = { version = "2", features = ["unstable", "macos-private-api"] }
 # macos-private-api: WebviewWindowBuilder::transparent on macOS (cursor
 # overlay window, src/cu_overlay.rs) is gated behind it.
 tauri-plugin-opener = "2"

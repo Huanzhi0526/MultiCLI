@@ -1,5 +1,9 @@
 # CC GUI 界面与交互规范（UI/UX Spec）
 
+## MultiCLI S00 派生说明
+
+当前入口为 `src/multicli/BaselineApp.tsx`，仅展示原生返回的环境与数据目录，并允许手动运行真实 Windows shell PTY 探针。按钮运行期间禁用，结果使用 aria-live 播报，失败展示原始错误；初始状态为未运行。文案通过现有 i18next 机制及 `src/i18n/multicli.ts` 提供。此窗口是 S00 诊断脚手架，不代表产品导航或终端验收。未启用上游 App/bootstrap 的插件、遥测、远程和更新入口。S01 替换成产品导航后同步维护本文。
+
 > **版本**：v0.1（首版，随实现增量维护）
 > **适用范围**：`src/styles`、`src/components`、`src/features` 中所有用户可见的界面与交互
 > **关联代码**：`src/styles/theme.css`（设计 token）、`src/styles/typography.css`（文本样式）、`src/components/base/*`（基础组件）、`src/i18n/{zh,en}.ts`（文案）

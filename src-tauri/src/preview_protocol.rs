@@ -20,7 +20,6 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use tauri::http::{header, Method, Request, Response, StatusCode};
-use tauri::{Manager, Runtime};
 
 /// Scheme name; Windows maps custom protocols to `http://<name>.localhost`.
 pub const PROTOCOL: &str = "ccgui-preview";
@@ -220,7 +219,11 @@ fn handle<F: Fn(&std::path::Path) -> bool>(
         .expect("static preview response")
 }
 
-pub(crate) fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+// Retained upstream registration only. MultiCLI disables the asset protocol
+// and never registers this preview scheme; keep its implementation for tracing.
+#[cfg(any())]
+pub(crate) fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    use tauri::Manager;
     builder.register_asynchronous_uri_scheme_protocol(PROTOCOL, |context, request, responder| {
         let scope = context.app_handle().asset_protocol_scope();
         // Off the webview thread: file reads are blocking, and drafts can pull

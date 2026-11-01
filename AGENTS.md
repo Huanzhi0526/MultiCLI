@@ -59,3 +59,12 @@
 ## 维护规则
 
 根文件只保留适用于本项目的高价值约定。新增规则应来自真实问题，合并重复项、删除失效内容；不要照搬其他技术栈、组织流程或不存在的文档链接。
+
+## MultiCLI 派生项目的当前用户授权
+
+- 上述规则来自固定上游版本并保留；本项目同时遵守父目录 AGENTS.md 和 `docs/execution/plan/`，冲突时用户本会话明确指示优先。
+- 用户于 2026-11-01 明确启用 MultiCLI 施工方案，授权 Sol 验收通过后 commit/push。这满足上文要求的当前对话显式提交决策，不需要每批重复询问。DeepSeek 始终禁止 Git 写入/GitHub 操作。
+- 本项目不用 Baton。Sol 生成完整的单批提示词，由用户手动交给 DeepSeek、手动带回结果。开发模型 ID/强度/上下文必须记录实际配置，未取得时不假填、不自行替换。
+- 仅 Sol / DeepSeek 两角色。S00 未通过不派 S01；开发回交后冻结写入，Sol 独立验收，不把自测或零退出码写成 ACCEPTED。
+- `multicli_bootstrap` 是本项目启动及 IPC 注册边界。禁止恢复上游启动入口，以免导入旧应用数据、安装 CLI skill、自动运行 DSH 或开放超范围后台能力。
+- 应用数据限 `%LOCALAPPDATA%/MultiCLI/{dev,test,prod}`；不采用上游 portable-data.json，不写 `.ccgui-next`、原始历史或 CLI 全局配置。未知能力标 unverified。

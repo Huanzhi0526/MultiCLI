@@ -65,10 +65,7 @@ pub(crate) static HOME_ENV_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::ne
 
 /// Application home directory: ~/.ccgui-next/
 pub fn app_home() -> PathBuf {
-    if let Some(path) = PORTABLE_HOME.as_ref() {
-        return path.clone();
-    }
-    home_dir().join(".ccgui-next")
+    crate::multicli_bootstrap::data_root().expect("invalid MultiCLI profile")
 }
 
 pub fn legacy_home() -> PathBuf {

@@ -8,19 +8,6 @@ export default defineConfig(() => ({
   plugins: [
     react(),
     tailwindcss(),
-    // TEMP DEBUG: beacon endpoint for composer trigger diagnosis. Remove after.
-    {
-      name: "dbg-beacon",
-      configureServer(server) {
-        server.middlewares.use("/__dbg", (req, res) => {
-          void import("node:fs").then((fs) =>
-            fs.appendFileSync("/tmp/composer-dbg.log", new Date().toISOString() + " " + (req.url ?? "") + "\n"),
-          );
-          res.statusCode = 204;
-          res.end();
-        });
-      },
-    },
   ],
   resolve: {
     alias: {
@@ -29,12 +16,13 @@ export default defineConfig(() => ({
   },
   clearScreen: false,
   server: {
-    port: 1420,
+    host: "127.0.0.1",
+    port: 1427,
     strictPort: true,
     fs: {
       // Sibling plugin repos (e.g. ../ccgui-plugin/usage-stats) are served in
       // dev so external plugins can be exercised without installing.
-      allow: [".."],
+      allow: ["."],
     },
     watch: {
       ignored: ["**/src-tauri/**"],

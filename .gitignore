@@ -32,6 +32,12 @@ Thumbs.db
 .vscode/
 skills-lock.json
 boardui.dev.env
+*.db
+*.db-wal
+*.db-shm
+*.log
+/diagnostics/
+/installers/
 CLAUDE.md
 .codegraph
 .workflow

@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "lockedOn": "2026-11-01",
+  "pathBase": "app/",
+  "entries": [
+    {
+      "name": "desktop-cc-gui",
+      "url": "https://github.com/zhukunpenglinyutong/desktop-cc-gui.git",
+      "commit": "6c46345a727e7c1b57e0dacecb4fe063d88ee8dc",
+      "license": "MIT",
+      "purpose": "base-candidate",
+      "localPath": "../references/desktop-cc-gui",
+      "reviewedPaths": [
+        "AGENTS.md",
+        "LICENSE",
+        "package.json",
+        "src-tauri/Cargo.toml",
+        "src-tauri/tauri.conf.json",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/paths.rs",
+        "src-tauri/src/terminal.rs",
+        "src-tauri/src/engine/codex_app.rs",
+        "src-tauri/src/engine/codebuddy.rs",
+        "src-tauri/src/engine/claude.rs"
+      ],
+      "downloadStatus": "PASS",
+      "sourceReview": "PARTIAL",
+      "buildStatus": "NOT_RUN"
+    },
+    {
+      "name": "agent-session-manager-desktop",
+      "url": "https://github.com/izll/agent-session-manager-desktop.git",
+      "commit": "cb6fbcd683ca5d8eeeb949d318f8797d92e6ea63",
+      "license": "MIT",
+      "purpose": "terminal-lifecycle-reference",
+      "localPath": "../references/agent-session-manager-desktop",
+      "reviewedPaths": [
+        "LICENSE",
+        "terminal_ws.go"
+      ],
+      "downloadStatus": "PASS",
+      "sourceReview": "PARTIAL",
+      "buildStatus": "NOT_RUN"
+    },
+    {
+      "name": "AionUi",
+      "url": "https://github.com/iOfficeAI/AionUi.git",
+      "commit": "11cd2a9a20d1e033157636efc570b41384c66d85",
+      "license": "Apache-2.0",
+      "purpose": "ui-layering-reference",
+      "localPath": "../references/AionUi",
+      "reviewedPaths": [
+        "AGENTS.md",
+        "LICENSE",
+        "docs/contributing/development.md"
+      ],
+      "downloadStatus": "PASS",
+      "sourceReview": "PARTIAL",
+      "buildStatus": "NOT_RUN"
+    },
+    {
+      "name": "AionCore",
+      "url": "https://github.com/iOfficeAI/AionCore.git",
+      "commit": "503a87199eb978790ca77675b39c84b241535bf3",
+      "license": "Apache-2.0",
+      "purpose": "protocol-reference",
+      "localPath": "../references/AionCore",
+      "reviewedPaths": [
+        "AGENTS.md",
+        "LICENSE",
+        "crates/aionui-session/src/backend/acp_conn.rs"
+      ],
+      "downloadStatus": "PASS",
+      "sourceReview": "PARTIAL",
+      "buildStatus": "NOT_RUN"
+    },
+    {
+      "name": "multi-cli-studio",
+      "url": "https://github.com/Austin-Patrician/multi-cli-studio.git",
+      "commit": "ad4bc1ef12fac62f1017d3b20dd3352b97b83ee1",
+      "license": "MIT",
+      "purpose": "organization-reference",
+      "localPath": "../references/multi-cli-studio",
+      "reviewedPaths": [
+        "LICENSE",
+        "src-tauri/src/acp.rs"
+      ],
+      "downloadStatus": "PASS",
+      "sourceReview": "PARTIAL",
+      "buildStatus": "NOT_RUN"
+    },
+    {
+      "name": "CodexBar",
+      "url": "https://github.com/steipete/CodexBar.git",
+      "commit": "897bff31731bb4b21b105f6e8bf4c32a8a8bf095",
+      "license": "MIT",
+      "purpose": "usage-model-reference",
+      "localPath": "../references/CodexBar",
+      "reviewedPaths": [
+        "AGENTS.md",
+        "LICENSE",
+        "Sources/CodexBarCore/UsageFetcher.swift"
+      ],
+      "downloadStatus": "PASS",
+      "sourceReview": "PARTIAL",
+      "buildStatus": "NOT_RUN"
+    }
+  ]
+}

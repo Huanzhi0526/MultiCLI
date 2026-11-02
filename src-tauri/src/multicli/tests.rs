@@ -2409,6 +2409,271 @@ fn migration_failure_preserves_version_notes_tags_and_backup() {
 }
 
 #[test]
+fn schema_v3_extends_installation_identity_and_keeps_every_reference() {
+    let root = TempRoot::new("v3-migration");
+    let db_path = root.path.join("multicli.db");
+
+    // Build a real v2 database whose installation is referenced by a Run and a
+    // Capability, plus user-owned notes and tags.
+    {
+        let service = MultiCliService::open_for_test(
+            &root.path,
+            MigrationFault {
+                stop_after_version: Some(2),
+                ..Default::default()
+            },
+        )
+        .expect("open v2 database");
+        assert_eq!(service.schema_version(), 2);
+        seed_host(&service);
+        service
+            .register_agent(&agent("codex", "openai", "Codex"))
+            .unwrap();
+        // The v2 table has no executable identity column, so the legacy row is
+        // written with the exact v2 shape. This is what a real v2 database
+        // contains before the upgrade.
+        service
+            .execute_raw(
+                "INSERT INTO agent_installations(
+                     id, host_id, agent_id, executable_display_path, executable_canonical_path,
+                     version, config_profile_id, created_at_ms
+                 ) VALUES (
+                     'install-codex', 'local-windows', 'codex',
+                     'C:\\Tools\\cli.exe', 'C:\\Tools\\cli.exe',
+                     '1.0.0', 'default', 1700000000000
+                 )",
+            )
+            .unwrap();
+        service
+            .register_workspace(&workspace("ws-1", HOST_ID, "C:\\Work\\Alpha"))
+            .unwrap();
+        service
+            .ensure_session(&session("session-1", "codex", Some("native-1")))
+            .unwrap();
+        service
+            .attach_workspace(&link("session-1", "ws-1", SessionWorkspaceRole::Primary))
+            .unwrap();
+        service.start_run(&sample_run()).expect("run references the install");
+        service
+            .declare_capability(&sample_capability())
+            .expect("capability references the install");
+    }
+    {
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO user_session_notes(session_id, note, updated_at_ms) VALUES (?1, ?2, ?3)",
+            params!["session-1", "v2 note must survive v3", 1_700_000_000_000_i64],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO user_session_tags(session_id, tag, created_at_ms) VALUES (?1, ?2, ?3)",
+            params!["session-1", "keep-me-v3", 1_700_000_000_000_i64],
+        )
+        .unwrap();
+        let has_identity: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_installations')
+                 WHERE name = 'executable_identity'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_identity, 0, "v2 has no executable identity column");
+    }
+
+    // Fail after the rebuild has run; the whole v3 upgrade must roll back.
+    let error = match MultiCliService::open_for_test(
+        &root.path,
+        MigrationFault {
+            fail_at: Some((3, 1)),
+            ..Default::default()
+        },
+    ) {
+        Ok(_) => panic!("injected v3 migration failure did not fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::Database);
+    assert_eq!(error.details["stage"], "migration");
+    assert_eq!(error.details["failedVersion"], 3);
+    assert_eq!(error.details["databaseVersion"], 2);
+    {
+        let conn = Connection::open(&db_path).unwrap();
+        let version: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 2, "failed v3 must not advance the version");
+        let rebuilt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'agent_installations_v3'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rebuilt, 0, "partial rebuild table must be rolled back");
+        let has_identity: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_installations')
+                 WHERE name = 'executable_identity'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_identity, 0);
+        let installs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agent_installations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(installs, 1, "the original row must still be there");
+    }
+
+    // A normal reopen completes v2 -> v3 without losing a single reference.
+    let service = open(&root);
+    assert_eq!(service.schema_version(), 3);
+    {
+        let conn = service.lock_for_test();
+        let (identity, kind, profile): (String, String, String) = conn
+            .query_row(
+                "SELECT executable_identity, executable_identity_kind, config_profile_id
+                 FROM agent_installations WHERE id = 'install-codex'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(identity, "canonical:c:\\tools\\cli.exe");
+        assert_eq!(kind, "canonical");
+        assert_eq!(profile, "default", "the stored profile must not be rewritten");
+
+        let run_install: Option<String> = conn
+            .query_row("SELECT installation_id FROM runs WHERE id = 'run-1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(run_install.as_deref(), Some("install-codex"));
+        let capability_install: Option<String> = conn
+            .query_row(
+                "SELECT installation_id FROM capabilities WHERE agent_id = 'codex'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(capability_install.as_deref(), Some("install-codex"));
+        let note: String = conn
+            .query_row(
+                "SELECT note FROM user_session_notes WHERE session_id = 'session-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(note, "v2 note must survive v3");
+        let tag: String = conn
+            .query_row(
+                "SELECT tag FROM user_session_tags WHERE session_id = 'session-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tag, "keep-me-v3");
+        let violations: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0);
+        assert!(
+            conn.query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .unwrap()
+                != 0,
+            "foreign key enforcement must be restored after the rebuild"
+        );
+    }
+
+    // The point of v3: two executables of one product under one profile.
+    let mut second = installation("install-codex-2", "codex", HOST_ID, "default");
+    second.executable.display_path = "C:\\Tools\\codex-2.exe".to_string();
+    second.executable.canonical_path = some("C:\\Tools\\codex-2.exe".to_string());
+    service
+        .register_installation(&second)
+        .expect("a second executable under the same profile is a separate install");
+
+    // The complete identity is still unique.
+    let duplicate = installation("install-codex-3", "codex", HOST_ID, "default");
+    assert_eq!(
+        service.register_installation(&duplicate).unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    // Same id with a different executable is a conflict, not a silent rebind.
+    let mut reidentified = installation("install-codex", "codex", HOST_ID, "default");
+    reidentified.executable.display_path = "C:\\Tools\\other.exe".to_string();
+    reidentified.executable.canonical_path = some("C:\\Tools\\other.exe".to_string());
+    assert_eq!(
+        service
+            .register_installation(&reidentified)
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+
+    // A row without a canonical path keeps an explicit unresolved identity.
+    let mut legacy = installation("install-legacy", "codex", HOST_ID, "default");
+    legacy.executable.display_path = "C:\\Tools\\legacy.cmd".to_string();
+    legacy.executable.canonical_path = none();
+    service.register_installation(&legacy).unwrap();
+    {
+        let conn = service.lock_for_test();
+        let (identity, kind): (String, String) = conn
+            .query_row(
+                "SELECT executable_identity, executable_identity_kind
+                 FROM agent_installations WHERE id = 'install-legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(identity, "unresolved-display:c:\\tools\\legacy.cmd");
+        assert_eq!(kind, "unresolved-display");
+    }
+
+    // Discovery registration reuses the same table and is idempotent.
+    let discovered = AgentInstallation {
+        id: "install-discovered".to_string(),
+        host_id: HOST_ID.to_string(),
+        agent_id: "codex".to_string(),
+        executable: HostPath {
+            host_id: HOST_ID.to_string(),
+            display_path: "C:\\Tools\\codex.exe".to_string(),
+            canonical_path: some("C:\\Tools\\codex.exe".to_string()),
+        },
+        version: some("0.166.0".to_string()),
+        config_profile_id: "unconfirmed-local".to_string(),
+    };
+    service
+        .register_discovered_installation(
+            &discovered,
+            "canonical:c:\\tools\\codex.exe",
+            "canonical",
+        )
+        .unwrap();
+    service
+        .register_discovered_installation(
+            &discovered,
+            "canonical:c:\\tools\\codex.exe",
+            "canonical",
+        )
+        .unwrap();
+    let count: i64 = service
+        .lock_for_test()
+        .query_row(
+            "SELECT COUNT(*) FROM agent_installations WHERE config_profile_id = 'unconfirmed-local'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "repeated discovery must not duplicate the install");
+}
+
+#[test]
 fn future_database_is_rejected_without_bytes_mode_or_data_changes() {
     let root = TempRoot::new("future-delete-journal");
     let db = root.path.join("multicli.db");

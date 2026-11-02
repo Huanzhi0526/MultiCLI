@@ -89,26 +89,73 @@ pub(crate) fn upsert_agent(
     Ok(agent.clone())
 }
 
+/// Comparison form of an installation executable. Windows paths are
+/// case-insensitive, so the identity is folded while `canonicalPath` itself
+/// keeps the case stored on disk.
+pub(crate) fn identity_text(value: &str) -> String {
+    value
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+/// Derives the schema-v3 executable identity from the frozen installation DTO.
+/// A row without a canonical path keeps an explicit unresolved display
+/// identity instead of guessing the real executable.
+pub(crate) fn executable_identity(installation: &AgentInstallation) -> (String, &'static str) {
+    match &installation.executable.canonical_path {
+        Some(canonical) => (
+            format!("canonical:{}", identity_text(canonical)),
+            "canonical",
+        ),
+        None => (
+            format!(
+                "unresolved-display:{}",
+                identity_text(&installation.executable.display_path)
+            ),
+            "unresolved-display",
+        ),
+    }
+}
+
 pub(crate) fn upsert_installation(
     conn: &mut Connection,
     installation: &AgentInstallation,
 ) -> Result<AgentInstallation, AppError> {
+    let (identity, identity_kind) = executable_identity(installation);
+    upsert_installation_with_identity(conn, installation, &identity, identity_kind)
+}
+
+/// Inserts or returns an installation. The complete identity is
+/// `host + agent + config profile + executable identity`; a version bump or a
+/// re-scan never creates a new row.
+pub(crate) fn upsert_installation_with_identity(
+    conn: &mut Connection,
+    installation: &AgentInstallation,
+    identity: &str,
+    identity_kind: &str,
+) -> Result<AgentInstallation, AppError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(existing) = read_installation(&tx, &installation.id)? {
+        let existing_identity = read_installation_identity(&tx, &installation.id)?
+            .unwrap_or_else(|| String::from("unresolved-display:"));
         let same_identity = existing.host_id == installation.host_id
             && existing.agent_id == installation.agent_id
-            && existing.config_profile_id == installation.config_profile_id;
+            && existing.config_profile_id == installation.config_profile_id
+            && existing_identity == identity;
         if !same_identity {
             return Err(AppError::conflict(
                 "agent installation",
-                "id is already registered to a different host, agent or config profile",
+                "id is already registered to a different host, agent, config profile or executable",
             )
             .with_details(serde_json::json!({
                 "installationId": installation.id,
                 "existingHostId": existing.host_id,
                 "existingAgentId": existing.agent_id,
+                "existingConfigProfileId": existing.config_profile_id,
                 "requestedHostId": installation.host_id,
                 "requestedAgentId": installation.agent_id,
+                "requestedConfigProfileId": installation.config_profile_id,
             })));
         }
         tx.commit()?;
@@ -117,11 +164,13 @@ pub(crate) fn upsert_installation(
     let by_identity: Option<String> = tx
         .query_row(
             "SELECT id FROM agent_installations
-             WHERE host_id = ?1 AND agent_id = ?2 AND config_profile_id = ?3",
+             WHERE host_id = ?1 AND agent_id = ?2 AND config_profile_id = ?3
+               AND executable_identity = ?4",
             params![
                 installation.host_id.as_str(),
                 installation.agent_id.as_str(),
                 installation.config_profile_id.as_str(),
+                identity,
             ],
             |row| row.get(0),
         )
@@ -129,7 +178,7 @@ pub(crate) fn upsert_installation(
     if let Some(existing_id) = by_identity {
         return Err(AppError::conflict(
             "agent installation",
-            "host/agent/config-profile identity is already registered with a different id",
+            "the complete installation identity is already registered with a different id",
         )
         .with_details(serde_json::json!({
             "requestedId": installation.id,
@@ -139,14 +188,17 @@ pub(crate) fn upsert_installation(
     tx.execute(
         "INSERT INTO agent_installations(
              id, host_id, agent_id, executable_display_path, executable_canonical_path,
+             executable_identity, executable_identity_kind,
              version, config_profile_id, created_at_ms
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             installation.id.as_str(),
             installation.host_id.as_str(),
             installation.agent_id.as_str(),
             installation.executable.display_path.as_str(),
             installation.executable.canonical_path.as_deref(),
+            identity,
+            identity_kind,
             installation.version.as_deref(),
             installation.config_profile_id.as_str(),
             now_ms(),
@@ -154,6 +206,19 @@ pub(crate) fn upsert_installation(
     )?;
     tx.commit()?;
     Ok(installation.clone())
+}
+
+pub(crate) fn read_installation_identity(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<String>, AppError> {
+    Ok(conn
+        .query_row(
+            "SELECT executable_identity FROM agent_installations WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 fn read_installation(conn: &Connection, id: &str) -> Result<Option<AgentInstallation>, AppError> {
@@ -672,6 +737,108 @@ pub(crate) fn read_process(
             map_process,
         )
         .optional()?)
+}
+
+/// Persisted discovery row. Separate from `processes` because a discovered
+/// instance also carries recognition, freshness and association evidence, and
+/// because an `unknown` row may exist without a verified observation.
+#[derive(Debug, Clone)]
+pub(crate) struct DiscoveryProcessRow {
+    pub host_id: String,
+    pub pid: u32,
+    pub creation_time: String,
+    pub agent_id: Option<String>,
+    pub installation_id: Option<String>,
+    pub product: Option<String>,
+    pub entry_kind: Option<String>,
+    pub recognition: Option<String>,
+    pub evidence_json: String,
+    pub state: String,
+    pub freshness: String,
+    pub state_reason: Option<String>,
+    pub executable_display_path: Option<String>,
+    pub executable_canonical_path: Option<String>,
+    pub redacted_command: Option<String>,
+    pub parent: Option<ProcessIdentity>,
+    pub parent_note: Option<String>,
+    pub source_program: Option<String>,
+    pub workspace_id: Option<String>,
+    pub workspace_evidence: Option<String>,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+    pub last_seen_generation: i64,
+}
+
+pub(crate) fn upsert_discovery_process(
+    conn: &Connection,
+    row: &DiscoveryProcessRow,
+) -> Result<(), AppError> {
+    let parent = row.parent.as_ref();
+    conn.execute(
+        "INSERT INTO discovery_processes(
+             host_id, pid, creation_time, agent_id, installation_id, product, entry_kind,
+             recognition, evidence_json, state, freshness, state_reason,
+             executable_display_path, executable_canonical_path, redacted_command,
+             parent_host_id, parent_pid, parent_creation_time, parent_note, source_program,
+             workspace_id, workspace_evidence, first_seen_at, last_seen_at,
+             last_seen_generation, updated_at_ms
+         ) VALUES (
+             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+             ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
+         )
+         ON CONFLICT(host_id, pid, creation_time) DO UPDATE SET
+             agent_id = excluded.agent_id,
+             installation_id = excluded.installation_id,
+             product = excluded.product,
+             entry_kind = excluded.entry_kind,
+             recognition = excluded.recognition,
+             evidence_json = excluded.evidence_json,
+             state = excluded.state,
+             freshness = excluded.freshness,
+             state_reason = excluded.state_reason,
+             executable_display_path = excluded.executable_display_path,
+             executable_canonical_path = excluded.executable_canonical_path,
+             redacted_command = excluded.redacted_command,
+             parent_host_id = excluded.parent_host_id,
+             parent_pid = excluded.parent_pid,
+             parent_creation_time = excluded.parent_creation_time,
+             parent_note = excluded.parent_note,
+             source_program = excluded.source_program,
+             workspace_id = excluded.workspace_id,
+             workspace_evidence = excluded.workspace_evidence,
+             last_seen_at = excluded.last_seen_at,
+             last_seen_generation = excluded.last_seen_generation,
+             updated_at_ms = excluded.updated_at_ms",
+        params![
+            row.host_id.as_str(),
+            row.pid as i64,
+            row.creation_time.as_str(),
+            row.agent_id.as_deref(),
+            row.installation_id.as_deref(),
+            row.product.as_deref(),
+            row.entry_kind.as_deref(),
+            row.recognition.as_deref(),
+            row.evidence_json.as_str(),
+            row.state.as_str(),
+            row.freshness.as_str(),
+            row.state_reason.as_deref(),
+            row.executable_display_path.as_deref(),
+            row.executable_canonical_path.as_deref(),
+            row.redacted_command.as_deref(),
+            parent.map(|identity| identity.host_id.as_str()),
+            parent.map(|identity| identity.pid as i64),
+            parent.map(|identity| identity.creation_time.as_str()),
+            row.parent_note.as_deref(),
+            row.source_program.as_deref(),
+            row.workspace_id.as_deref(),
+            row.workspace_evidence.as_deref(),
+            row.first_seen_at.as_str(),
+            row.last_seen_at.as_str(),
+            row.last_seen_generation,
+            now_ms(),
+        ],
+    )?;
+    Ok(())
 }
 
 pub(crate) fn link_run_process(

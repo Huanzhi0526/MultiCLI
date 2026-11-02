@@ -22,3 +22,6 @@
 只读目录元信息：Codex sessions、Claude projects、CodeBuddy sessions/projects 候选根存在且可列目录；内容解析全部 NOT_RUN。TRAE 已检查的常见候选未发现，其他来源仍未知。这些目录探针不授予历史兼容性。
 
 S00 平台基线另经真实 Windows 桌面、dev/test/prod 与安装版 cmd.exe ConPTY 按钮验证；四项结果均 true。这不将上表任一产品 PTY、历史、结构化交互或额度从 NOT_RUN 改为 PASS。
+
+
+S02 主管独立验收 ACCEPTED（2026-11-02）：真实 Windows 后端与实际产品界面在隔离 ConPTY/PowerShell 中发现 Codex、Claude、CodeBuddy；每款两组长存活样本分别为 3238/947、3247/967、3187/881 ms。实际 cmd→Node 链、两个普通进程负例、完整创建时间身份、stale/error/重试恢复、设置写入恢复及窗口退出不影响外部进程均通过。安装页准确区分可信三核心与未知/残留候选。拒绝访问/PID 竞争另有确定性反例，真实升级/受保护进程/长时性能未测；不是 p95 或九族覆盖结果。此结果不提升上表历史、聊天、权限、产品 PTY 或额度结论。

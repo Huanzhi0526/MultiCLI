@@ -6,6 +6,7 @@
 //! document. Product IPC is registered in `multicli_bootstrap`.
 
 pub mod diagnostics;
+pub mod discovery;
 pub mod domain;
 pub mod error;
 pub mod path;

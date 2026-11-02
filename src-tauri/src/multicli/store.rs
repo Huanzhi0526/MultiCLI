@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const DB_FILE_NAME: &str = "multicli.db";
 
@@ -23,6 +23,9 @@ struct Migration {
     /// Each element is executed as its own batch. A test-only fault can stop
     /// between elements, which proves the transaction rolls back partial DDL.
     statements: &'static [&'static str],
+    /// A table rebuild must run with `foreign_keys = OFF` so `DROP TABLE`
+    /// cannot fire `ON DELETE SET NULL` on the child rows it is re-pointing.
+    requires_foreign_keys_off: bool,
 }
 
 const V1_CORE: &str = r#"
@@ -252,16 +255,111 @@ CREATE INDEX IF NOT EXISTS ix_messages_run
     ON messages(run_id, seq, id);
 "#;
 
+/// Schema v3 — installation identity plus the discovery process state table.
+///
+/// The old unique key `(host_id, agent_id, config_profile_id)` could not
+/// express two executables of one product under one profile. The rebuild adds
+/// an explicit `executable_identity` column and extends the unique key with
+/// it. Legacy rows without a canonical path keep an explicitly *unresolved*
+/// display identity; no path is guessed. Existing ids, and therefore every
+/// Run/Capability foreign key, are copied unchanged.
+const V3_INSTALLATION_IDENTITY: &str = r#"
+CREATE TABLE agent_installations_v3(
+    id TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    executable_display_path TEXT NOT NULL CHECK(length(trim(executable_display_path)) > 0),
+    executable_canonical_path TEXT CHECK(
+        executable_canonical_path IS NULL OR length(trim(executable_canonical_path)) > 0
+    ),
+    executable_identity TEXT NOT NULL CHECK(length(trim(executable_identity)) > 0),
+    executable_identity_kind TEXT NOT NULL CHECK(
+        executable_identity_kind IN ('canonical', 'unresolved-display', 'package', 'shim')
+    ),
+    version TEXT CHECK(version IS NULL OR length(trim(version)) > 0),
+    config_profile_id TEXT NOT NULL CHECK(length(trim(config_profile_id)) > 0),
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE(host_id, agent_id, config_profile_id, executable_identity)
+) STRICT;
+
+INSERT INTO agent_installations_v3(
+    id, host_id, agent_id, executable_display_path, executable_canonical_path,
+    executable_identity, executable_identity_kind, version, config_profile_id, created_at_ms
+)
+SELECT id, host_id, agent_id, executable_display_path, executable_canonical_path,
+    CASE WHEN executable_canonical_path IS NOT NULL
+         THEN 'canonical:' || lower(replace(executable_canonical_path, '/', '\'))
+         ELSE 'unresolved-display:' || lower(replace(executable_display_path, '/', '\'))
+    END,
+    CASE WHEN executable_canonical_path IS NOT NULL
+         THEN 'canonical' ELSE 'unresolved-display'
+    END,
+    version, config_profile_id, created_at_ms
+FROM agent_installations;
+
+DROP TABLE agent_installations;
+
+ALTER TABLE agent_installations_v3 RENAME TO agent_installations;
+"#;
+
+const V3_DISCOVERY_STATE: &str = r#"
+CREATE TABLE discovery_processes(
+    host_id TEXT NOT NULL,
+    pid INTEGER NOT NULL CHECK(pid >= 0),
+    creation_time TEXT NOT NULL CHECK(length(trim(creation_time)) > 0),
+    agent_id TEXT,
+    installation_id TEXT,
+    product TEXT,
+    entry_kind TEXT,
+    recognition TEXT CHECK(recognition IS NULL OR recognition IN ('confirmed', 'likely')),
+    evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),
+    state TEXT NOT NULL CHECK(state IN ('alive', 'exited', 'unknown')),
+    freshness TEXT NOT NULL CHECK(freshness IN ('fresh', 'stale')),
+    state_reason TEXT,
+    executable_display_path TEXT,
+    executable_canonical_path TEXT,
+    redacted_command TEXT,
+    parent_host_id TEXT,
+    parent_pid INTEGER CHECK(parent_pid IS NULL OR parent_pid >= 0),
+    parent_creation_time TEXT,
+    parent_note TEXT,
+    source_program TEXT,
+    workspace_id TEXT,
+    workspace_evidence TEXT,
+    first_seen_at TEXT NOT NULL CHECK(length(trim(first_seen_at)) > 0),
+    last_seen_at TEXT NOT NULL CHECK(length(trim(last_seen_at)) > 0),
+    last_seen_generation INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(host_id, pid, creation_time),
+    CHECK(
+        (parent_host_id IS NULL AND parent_pid IS NULL AND parent_creation_time IS NULL)
+        OR
+        (parent_host_id IS NOT NULL AND parent_pid IS NOT NULL AND parent_creation_time IS NOT NULL)
+    )
+) STRICT;
+
+CREATE INDEX ix_discovery_processes_order
+    ON discovery_processes(agent_id, last_seen_at DESC, pid);
+"#;
+
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
         description: "core domain schema and user-owned notes/tags",
         statements: &[V1_CORE],
+        requires_foreign_keys_off: false,
     },
     Migration {
         version: 2,
         description: "message access indexes for session detail and run tracing",
         statements: &[V2_MESSAGE_ORDER_INDEX, V2_RUN_MESSAGE_INDEX],
+        requires_foreign_keys_off: false,
+    },
+    Migration {
+        version: 3,
+        description: "installation executable identity and discovery process state",
+        statements: &[V3_INSTALLATION_IDENTITY, V3_DISCOVERY_STATE],
+        requires_foreign_keys_off: true,
     },
 ];
 
@@ -572,6 +670,50 @@ fn apply_migration(
     migration: &Migration,
     fault: MigrationFault,
 ) -> Result<(), AppError> {
+    if !migration.requires_foreign_keys_off {
+        return apply_migration_inner(conn, migration, fault);
+    }
+    // `PRAGMA foreign_keys` is a no-op inside a transaction, so a table
+    // rebuild toggles it around the transaction and re-verifies every child
+    // reference before committing.
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let result = apply_migration_inner(conn, migration, fault);
+    let restored = conn.pragma_update(None, "foreign_keys", "ON");
+    match result {
+        Ok(()) => {
+            restored?;
+            let violations: i64 =
+                conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get(0)
+                })?;
+            if violations > 0 {
+                return Err(AppError::new(
+                    ErrorCode::Database,
+                    format!(
+                        "schema migration to version {} left {violations} foreign key violations",
+                        migration.version
+                    ),
+                )
+                .with_details(json!({
+                    "stage": "migrationForeignKeyCheck",
+                    "version": migration.version,
+                    "violations": violations,
+                })));
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let _ = restored;
+            Err(error)
+        }
+    }
+}
+
+fn apply_migration_inner(
+    conn: &mut Connection,
+    migration: &Migration,
+    fault: MigrationFault,
+) -> Result<(), AppError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for (index, statement) in migration.statements.iter().enumerate() {
         if fault.fail_at == Some((migration.version, index)) {
@@ -585,6 +727,26 @@ fn apply_migration(
             ));
         }
         tx.execute_batch(statement)?;
+    }
+    if migration.requires_foreign_keys_off {
+        let violations: i64 =
+            tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        if violations > 0 {
+            return Err(AppError::new(
+                ErrorCode::Database,
+                format!(
+                    "schema migration to version {} would break {violations} foreign key references",
+                    migration.version
+                ),
+            )
+            .with_details(json!({
+                "stage": "migrationForeignKeyCheck",
+                "version": migration.version,
+                "violations": violations,
+            })));
+        }
     }
     tx.execute(
         "INSERT INTO schema_migrations(version, description, applied_at_ms) VALUES (?1, ?2, ?3)",

@@ -4,6 +4,12 @@
 //! migrations, CLI skill installation and background hosts do not belong to
 //! this application. This file is also the only place that registers product
 //! commands; the domain module stays transport-independent.
+use crate::multicli::discovery::detect::ScannerEnvironment;
+use crate::multicli::discovery::winproc::WindowsProcessBackend;
+use crate::multicli::discovery::{
+    DiscoveryEngine, DiscoverySettings, DiscoverySettingsUpdate, InstallationDiscoveryView,
+    InstallationQuery, ProcessDiscoveryPage, ProcessQuery, ScanView,
+};
 use crate::multicli::{
     AgentListItem, AppError, Capability, CapabilityQuery, DiagnosticsExport, ErrorCode, Host,
     MultiCliService, Page, PageRequest, SessionDetail, SessionQuery, SessionSummary,
@@ -63,6 +69,7 @@ pub struct MultiCliRuntime {
     root: PathBuf,
     profile: String,
     state: Mutex<RuntimeState>,
+    discovery: Mutex<Option<Arc<DiscoveryEngine>>>,
 }
 
 #[derive(Default)]
@@ -77,6 +84,7 @@ impl MultiCliRuntime {
             root,
             profile,
             state: Mutex::new(RuntimeState::default()),
+            discovery: Mutex::new(None),
         }
     }
 
@@ -185,13 +193,44 @@ impl MultiCliRuntime {
             }
         }
     }
+    /// Lazily creates the discovery engine. The engine opens no database of its
+    /// own; it reuses the same service and data root and starts one background
+    /// sampling thread. A failed database open is returned as the same real
+    /// `AppError` the rest of the UI already shows.
+    pub fn discovery(&self) -> Result<Arc<DiscoveryEngine>, AppError> {
+        let mut slot = self.discovery.lock();
+        if let Some(engine) = slot.as_ref() {
+            return Ok(engine.clone());
+        }
+        let service = self.service()?;
+        let host_id = "local-windows";
+        let engine = Arc::new(DiscoveryEngine::new(
+            host_id,
+            &self.root,
+            service,
+            Arc::new(WindowsProcessBackend::new(host_id)),
+            ScannerEnvironment::from_process_env(),
+        ));
+        engine.start();
+        *slot = Some(engine.clone());
+        Ok(engine)
+    }
+
+    /// Ends only the application's own sampling thread. External CLI processes
+    /// are untouched.
+    pub fn stop_discovery(&self) {
+        let slot = self.discovery.lock();
+        if let Some(engine) = slot.as_ref() {
+            engine.stop();
+        }
+    }
 }
 
 #[tauri::command]
 fn multicli_baseline_info(runtime: State<'_, MultiCliRuntime>) -> Result<BaselineInfo, String> {
     Ok(BaselineInfo {
         product: "MultiCLI",
-        stage: "S01 — navigation and diagnostics",
+        stage: "S02 — installation and external process discovery",
         profile: runtime.profile().to_string(),
         data_root: runtime.root().display().to_string(),
         upstream_commit: "6c46345a727e7c1b57e0dacecb4fe063d88ee8dc",
@@ -314,6 +353,82 @@ fn multicli_export_diagnostics(
 ) -> Result<DiagnosticsExport, AppError> {
     let service = runtime.service()?;
     export_diagnostics_impl(&service, runtime.profile())
+}
+
+fn list_installations_impl(
+    engine: &DiscoveryEngine,
+    query: &InstallationQuery,
+) -> Result<Page<InstallationDiscoveryView>, AppError> {
+    engine.list_installations(query)
+}
+
+#[tauri::command]
+fn multicli_list_installations(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<Page<InstallationDiscoveryView>, AppError> {
+    let query: InstallationQuery = required_argument(query, "query")?;
+    query.validate()?;
+    let engine = runtime.discovery()?;
+    list_installations_impl(&engine, &query)
+}
+
+fn list_processes_impl(
+    engine: &DiscoveryEngine,
+    query: &ProcessQuery,
+) -> Result<ProcessDiscoveryPage, AppError> {
+    engine.list_processes(query)
+}
+
+#[tauri::command]
+fn multicli_list_processes(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<ProcessDiscoveryPage, AppError> {
+    let query: ProcessQuery = required_argument(query, "query")?;
+    query.validate()?;
+    let engine = runtime.discovery()?;
+    list_processes_impl(&engine, &query)
+}
+
+fn refresh_discovery_impl(engine: &DiscoveryEngine) -> ScanView {
+    engine.refresh()
+}
+
+/// Manual refresh. Shares the in-flight scan instead of stacking scanners and
+/// returns the generation that actually completed.
+#[tauri::command]
+fn multicli_refresh_discovery(runtime: State<'_, MultiCliRuntime>) -> Result<ScanView, AppError> {
+    let engine = runtime.discovery()?;
+    Ok(refresh_discovery_impl(&engine))
+}
+
+fn update_discovery_settings_impl(
+    engine: &DiscoveryEngine,
+    query: &DiscoverySettingsUpdate,
+) -> Result<DiscoverySettings, AppError> {
+    engine.update_settings(query)
+}
+
+/// Bounded scan-interval setting. It is persisted only under this profile's
+/// own data root (`discovery-settings.json`) and never touches a CLI config.
+#[tauri::command]
+fn multicli_update_discovery_settings(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<DiscoverySettings, AppError> {
+    let query: DiscoverySettingsUpdate = required_argument(query, "query")?;
+    if !(crate::multicli::discovery::view::MIN_SCAN_INTERVAL_MS
+        ..=crate::multicli::discovery::view::MAX_SCAN_INTERVAL_MS)
+        .contains(&query.interval_ms)
+    {
+        return Err(AppError::invalid_argument(
+            "intervalMs",
+            "must be between 1000 and 60000",
+        ));
+    }
+    let engine = runtime.discovery()?;
+    update_discovery_settings_impl(&engine, &query)
 }
 
 #[derive(Serialize)]
@@ -471,7 +586,7 @@ pub fn run() {
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("MultiCLI — S01")
+            .title("MultiCLI — S02")
             .inner_size(1320.0, 820.0)
             .min_inner_size(960.0, 640.0)
             .data_directory(webview_directory)
@@ -486,10 +601,23 @@ pub fn run() {
             multicli_list_sessions,
             multicli_get_session,
             multicli_list_capabilities,
-            multicli_export_diagnostics
+            multicli_export_diagnostics,
+            multicli_list_installations,
+            multicli_list_processes,
+            multicli_refresh_discovery,
+            multicli_update_discovery_settings
         ])
-        .run(tauri::generate_context!())
-        .expect("run MultiCLI");
+        .build(tauri::generate_context!())
+        .expect("build MultiCLI")
+        .run(|handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Ends only this application's own sampling thread. External
+                // CLIs keep running untouched.
+                if let Some(runtime) = tauri::Manager::try_state::<MultiCliRuntime>(handle) {
+                    runtime.stop_discovery();
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -530,7 +658,10 @@ mod tests {
                 multicli_list_agents,
                 multicli_list_sessions,
                 multicli_list_capabilities,
-                multicli_get_session
+                multicli_get_session,
+                multicli_list_installations,
+                multicli_list_processes,
+                multicli_update_discovery_settings
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
@@ -550,6 +681,24 @@ mod tests {
             ),
             ("multicli_list_capabilities", json!({"query":{"limit":20}})),
             ("multicli_get_session", json!({"sessionId":42})),
+            ("multicli_list_installations", json!({})),
+            ("multicli_list_installations", json!({"query":{"limit":0}})),
+            (
+                "multicli_list_installations",
+                json!({"query":{"limit":20,"agentId":" "}}),
+            ),
+            (
+                "multicli_list_processes",
+                json!({"query":{"limit":20,"state":"not-a-state"}}),
+            ),
+            (
+                "multicli_list_processes",
+                json!({"query":{"limit":20,"workspaceId":"ws-1","unknown":1}}),
+            ),
+            (
+                "multicli_update_discovery_settings",
+                json!({"query":{"intervalMs":10}}),
+            ),
         ] {
             let error = tauri::test::get_ipc_response(
                 &window,
@@ -830,7 +979,11 @@ mod tests {
         let export = export_diagnostics_impl(&service, "test").unwrap();
         assert_eq!(export.created_at.ends_with('Z'), true);
         let path = PathBuf::from(&export.path);
-        assert!(path.starts_with(root.join("diagnostics")));
+        // CI's Windows temp directory may be a short-name/verbatim alias.
+        // Compare filesystem identities while retaining the containment check.
+        assert!(std::fs::canonicalize(&path)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(root.join("diagnostics")).unwrap()));
         let text = std::fs::read_to_string(&path).unwrap();
         let document: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(document["schemaVersion"], 1);
@@ -840,7 +993,7 @@ mod tests {
         assert_eq!(document["counts"]["sessions"], 1);
         assert_eq!(document["counts"]["messages"], 1);
         assert_eq!(document["counts"]["runs"], 1);
-        assert_eq!(document["database"]["schemaVersion"], 2);
+        assert_eq!(document["database"]["schemaVersion"], 3);
         assert_eq!(document["database"]["journalMode"], "wal");
         let agent = &document["capabilities"]["byAgent"][0];
         assert_eq!(agent["agentId"], "agent-1");

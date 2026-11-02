@@ -1,4 +1,4 @@
-# 实际源码映射（S00–S01）
+# 实际源码映射（S00–S02）
 
 固定上游 `6c46345a727e7c1b57e0dacecb4fe063d88ee8dc`；以下路径相对 app。现存文件与拟新增路径明确分开。
 
@@ -19,8 +19,10 @@
 | 用量参考 | src-tauri/src/usage_limits.rs、usage_stats.rs、engine/codex_usage.rs | S06 对照官方接口，不能混成订阅余额 |
 | 远程/电脑控制/插件 | src-tauri/src/web.rs、relay.rs、computer_use.rs、plugins/、dsh_host.rs | 不在当前 IPC 注册表或启动链；没有本版实现任务 |
 
-S01 已验收模块：`src-tauri/src/multicli/{domain,error,store,repo,service,path,diagnostics}.rs`，公开入口 MultiCliService，独立 multicli.db、schema version 2。path.rs 处理真实路径/worktree，diagnostics.rs 匿名白名单导出，tests.rs 正式回归。
+S01 已验收模块：`src-tauri/src/multicli/{domain,error,store,repo,service,path,diagnostics}.rs`，公开入口 MultiCliService，独立 multicli.db（S01 schema v2；S02 已验收 v3）。path.rs 处理真实路径/worktree，diagnostics.rs 匿名白名单导出，tests.rs 正式回归。
 
 六个产品 IPC、懒初始化与失败重试在 `src-tauri/src/multicli_bootstrap.rs`，没有 multicli/ipc.rs。前端为 `src/multicli/{App.tsx,components.tsx,api.ts,types.ts,navigation.ts,usePagedResource.ts}`，文案 `src/i18n/multicli.ts`，不走旧 src/App.tsx。显式合成工具 `src-tauri/examples/multicli_fixture.rs` 不由产品启动调用。冻结 schema 未改。
 
-S02 模块尚不存在，预留 `src-tauri/src/multicli/discovery/` 与 `src/multicli/discovery/`。现有 ProcessIdentity、ProcessObservation、RunProcessLink 和服务持久化入口可复用；新 IPC 仍集中 multicli_bootstrap，禁止恢复上游启动/历史扫描或接管外部进程。
+S02 已经独立代码、真实 Windows 后端与实窗验收 ACCEPTED。后端 `src-tauri/src/multicli/discovery/` 已存在：signature/wrapper/detect/probe、winproc/classify/snapshot、engine/view/tests。四个发现/设置 IPC 仍在 multicli_bootstrap。schema v3 扩展安装身份并添加 discovery_processes，迁移在 store/repo/service 内。
+
+前端 `src/multicli/SessionBrowser.tsx` 保留 S01 三栏，App.tsx 顶部切换；`src/multicli/discovery/{InstallationsView,ProcessesView,controls,useDiscoveryScan}` 已存在，组件后缀 tsx、hook 后缀 ts。新接口详见 docs/contracts/discovery-v1.md，三份原冻结 schema 未改。没有恢复旧 startup/history/terminal。

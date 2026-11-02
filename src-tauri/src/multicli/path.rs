@@ -481,7 +481,7 @@ pub(crate) fn canonical_text(path: &Path) -> String {
 
 /// Stable FNV-1a pair (128 bits of output, 64-bit arithmetic) so ids do not
 /// depend on the platform hasher or on absolute paths being exposed.
-fn stable_hash(input: &str) -> String {
+pub(crate) fn stable_hash(input: &str) -> String {
     let mut left: u64 = 0xcbf2_9ce4_8422_2325;
     let mut right: u64 = 0x8422_2325_cbf2_9ce4;
     for byte in input.as_bytes() {

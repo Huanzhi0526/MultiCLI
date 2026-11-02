@@ -3,27 +3,14 @@ import { useTranslation } from "react-i18next";
 import "@/i18n/multicli";
 import { multiCliApi } from "./api";
 import type { MultiCliApi } from "./api";
-import {
-  EntryTabs,
-  ErrorPanel,
-  ScopeList,
-  SessionDetailView,
-  SessionList,
-} from "./components";
-import { sessionFilterKey, toAppError } from "./navigation";
-import { useDetailResource, usePagedResource } from "./usePagedResource";
-import type {
-  AgentListItem,
-  AppError,
-  Capability,
-  DiagnosticsExport,
-  SessionDetail,
-  SessionOrigin,
-  SessionSummary,
-  WorkspaceListItem,
-} from "./types";
+import { ErrorPanel } from "./components";
+import SessionBrowser from "./SessionBrowser";
+import InstallationsView from "./discovery/InstallationsView";
+import ProcessesView from "./discovery/ProcessesView";
+import type { AppError, DiagnosticsExport } from "./types";
+import { toAppError } from "./navigation";
 
-type Entry = "workspaces" | "agents";
+export type AppView = "sessions" | "installations" | "processes";
 
 interface ExportState {
   status: "idle" | "pending" | "done" | "error";
@@ -31,118 +18,21 @@ interface ExportState {
   error?: AppError;
 }
 
+const VIEWS: { id: AppView; label: string; testId: string }[] = [
+  { id: "sessions", label: "navSessions", testId: "view-sessions" },
+  { id: "installations", label: "navInstallations", testId: "view-installations" },
+  { id: "processes", label: "navProcesses", testId: "view-processes" },
+];
+
 export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
   const { t } = useTranslation("multicli");
-  const [entry, setEntry] = useState<Entry>("workspaces");
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [agentId, setAgentId] = useState<string | null>(null);
-  const [origin, setOrigin] = useState<SessionOrigin | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [view, setView] = useState<AppView>("sessions");
   const [exportState, setExportState] = useState<ExportState>({ status: "idle" });
 
   useEffect(() => {
     // Keep the inherited boot watchdog from replacing a healthy mounted page.
     document.documentElement.dataset.appMounted = "1";
   }, []);
-
-  const workspaces = usePagedResource<WorkspaceListItem>(
-    "workspaces",
-    (cursor) => api.listWorkspaces({ limit: 100, cursor }),
-    (item) => item.workspace.id,
-  );
-  const agents = usePagedResource<AgentListItem>(
-    "agents",
-    (cursor) => api.listAgents({ limit: 100, cursor }),
-    (item) => item.agent.id,
-  );
-  const activeWorkspaceId = entry === "workspaces" ? workspaceId : null;
-  const activeAgentId = entry === "agents" ? agentId : null;
-  const sessionsKey = sessionFilterKey(entry, activeWorkspaceId, activeAgentId, origin);
-  const sessions = usePagedResource<SessionSummary>(
-    sessionsKey,
-    (cursor) =>
-      api.listSessions({
-        limit: 20,
-        cursor,
-        workspaceId: activeWorkspaceId,
-        agentId: activeAgentId,
-        origin,
-      }),
-    (item) => item.session.id,
-  );
-  const detail = useDetailResource<SessionDetail>(selectedSessionId, (id) =>
-    api.getSession(id),
-  );
-  const detailAgentId = detail.data?.session.agentId ?? null;
-  const capabilities = usePagedResource<Capability>(
-    detailAgentId ? `capabilities|${detailAgentId}` : null,
-    (cursor) =>
-      detailAgentId
-        ? api.listCapabilities({ agentId: detailAgentId, limit: 50, cursor })
-        : Promise.resolve({ items: [], nextCursor: null, total: 0 }),
-    (item) => `${item.name}|${item.installationId ?? ""}`,
-  );
-
-  const clearSelection = useCallback(() => {
-    setSelectedSessionId(null);
-  }, []);
-
-  const selectEntry = useCallback(
-    (next: Entry) => {
-      setEntry(next);
-      clearSelection();
-    },
-    [clearSelection],
-  );
-
-  const selectAll = useCallback(() => {
-    if (entry === "workspaces") {
-      setWorkspaceId(null);
-    } else {
-      setAgentId(null);
-    }
-    clearSelection();
-  }, [clearSelection, entry]);
-
-  const selectWorkspace = useCallback(
-    (id: string) => {
-      setEntry("workspaces");
-      setWorkspaceId(id);
-      clearSelection();
-    },
-    [clearSelection],
-  );
-
-  const selectAgent = useCallback(
-    (id: string) => {
-      setEntry("agents");
-      setAgentId(id);
-      clearSelection();
-    },
-    [clearSelection],
-  );
-
-  const selectSession = useCallback((id: string) => {
-    setSelectedSessionId(id);
-  }, []);
-
-  const changeOrigin = useCallback(
-    (next: SessionOrigin | null) => {
-      setOrigin(next);
-      clearSelection();
-    },
-    [clearSelection],
-  );
-
-  const refreshAll = useCallback(() => {
-    workspaces.refresh();
-    agents.refresh();
-    sessions.refresh();
-    if (selectedSessionId) {
-      detail.refresh();
-      capabilities.refresh();
-    }
-  }, [agents, capabilities, detail, selectedSessionId, sessions, workspaces]);
 
   const exportDiagnostics = useCallback(async () => {
     setExportState({ status: "pending" });
@@ -164,6 +54,29 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
           <h1 className="text-base font-semibold">MultiCLI</h1>
           <p className="text-[11px] text-text-tertiary">{t("stage")}</p>
         </div>
+        <nav
+          className="flex gap-1 rounded-lg bg-background-secondary-default p-1"
+          role="tablist"
+          aria-label={t("navLabel")}
+        >
+          {VIEWS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={view === item.id}
+              className={
+                view === item.id
+                  ? "rounded-md bg-background-primary-default px-3 py-1.5 text-xs font-medium text-text-primary shadow-sm"
+                  : "rounded-md px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary"
+              }
+              data-testid={item.testId}
+              onClick={() => setView(item.id)}
+            >
+              {t(item.label)}
+            </button>
+          ))}
+        </nav>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {exportState.status === "done" && exportState.result ? (
             <span
@@ -200,43 +113,9 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
         ) : null}
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-72 shrink-0 flex-col border-r border-separator-border">
-          <div className="p-3">
-            <EntryTabs entry={entry} onChange={selectEntry} />
-          </div>
-          <ScopeList
-            entry={entry}
-            workspaces={workspaces}
-            agents={agents}
-            selectedId={entry === "workspaces" ? workspaceId : agentId}
-            onSelectAll={selectAll}
-            onSelectWorkspace={selectWorkspace}
-            onSelectAgent={selectAgent}
-            onRetry={refreshAll}
-          />
-        </aside>
-
-        <section className="flex w-[24rem] shrink-0 flex-col border-r border-separator-border">
-          <SessionList
-            sessions={sessions}
-            selectedId={selectedSessionId}
-            origin={origin}
-            onOriginChange={changeOrigin}
-            onSelect={selectSession}
-            onRefresh={refreshAll}
-            onRetry={refreshAll}
-          />
-        </section>
-
-        <main className="min-h-0 min-w-0 flex-1 overflow-auto">
-          <SessionDetailView
-            detail={detail}
-            capabilities={capabilities}
-            onRetry={refreshAll}
-          />
-        </main>
-      </div>
+      {view === "sessions" ? <SessionBrowser api={api} /> : null}
+      {view === "installations" ? <InstallationsView api={api} /> : null}
+      {view === "processes" ? <ProcessesView api={api} /> : null}
     </div>
   );
 }

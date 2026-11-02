@@ -152,6 +152,48 @@ impl MultiCliService {
         repo::upsert_installation(&mut conn, installation)
     }
 
+    /// Registers a discovered installation with its explicit executable
+    /// identity (a canonical executable, a Node package entry or an
+    /// unresolved display path). Re-running discovery with the same identity is
+    /// idempotent and never creates a second row for a new version.
+    pub fn register_discovered_installation(
+        &self,
+        installation: &AgentInstallation,
+        identity: &str,
+        identity_kind: &str,
+    ) -> Result<AgentInstallation, AppError> {
+        installation.validate()?;
+        if identity.trim().is_empty() {
+            return Err(AppError::invalid_argument(
+                "executableIdentity",
+                "must not be empty",
+            ));
+        }
+        let mut conn = self.store.connection().lock();
+        repo::upsert_installation_with_identity(&mut conn, installation, identity, identity_kind)
+    }
+
+    /// Lookup used only to attach an explicit working-directory argument to a
+    /// workspace the user already registered. It never creates a workspace.
+    pub fn find_workspace_by_canonical(
+        &self,
+        host_id: &str,
+        canonical_path: &str,
+    ) -> Result<Option<Workspace>, AppError> {
+        require_id("hostId", host_id)?;
+        require_id("canonicalPath", canonical_path)?;
+        let conn = self.store.connection().lock();
+        repo::find_workspace_by_canonical(&conn, host_id, canonical_path)
+    }
+
+    pub fn record_discovery_process(
+        &self,
+        row: &repo::DiscoveryProcessRow,
+    ) -> Result<(), AppError> {
+        let conn = self.store.connection().lock();
+        repo::upsert_discovery_process(&conn, row)
+    }
+
     pub fn register_workspace(&self, workspace: &Workspace) -> Result<Workspace, AppError> {
         workspace.validate()?;
         let conn = self.store.connection().lock();

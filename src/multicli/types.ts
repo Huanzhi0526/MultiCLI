@@ -60,6 +60,13 @@ export interface HostPath {
   canonicalPath: string | null;
 }
 
+/** `hostId + pid + OS creationTime`; PID alone never identifies a process. */
+export interface ProcessIdentity {
+  hostId: string;
+  pid: number;
+  creationTime: string;
+}
+
 export interface AgentDefinition {
   id: string;
   vendor: string;
@@ -181,6 +188,126 @@ export interface CapabilityQuery extends PageQuery {
 export interface DiagnosticsExport {
   path: string;
   createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// S02 discovery views (`docs/contracts/discovery-v1.md`). Kept separate from
+// the frozen domain DTOs: an external CLI never claims a chat session.
+// ---------------------------------------------------------------------------
+
+export type InstallStatus =
+  | "installed"
+  | "unverified"
+  | "missing-target"
+  | "historical-residue";
+
+export type ProbeStatus = "ok" | "failed" | "timeout" | "skipped" | "not-attempted";
+
+export type DiscoveryEntryKind =
+  | "native-exe"
+  | "node-package"
+  | "cmd-wrapper"
+  | "powershell-wrapper";
+
+export type ProcessState = "alive" | "exited" | "unknown";
+export type Freshness = "fresh" | "stale";
+export type RecognitionStrength = "confirmed" | "likely";
+export type ScanStatus = "idle" | "scanning" | "ok" | "partial" | "error";
+
+export interface ProbeView {
+  status: ProbeStatus;
+  reason: string | null;
+  checkedAt: string | null;
+  durationMs: number | null;
+  arguments: string[];
+}
+
+export interface InstallationDiscoveryView {
+  installationId: string | null;
+  agentId: string;
+  product: string;
+  signatureId: string;
+  status: InstallStatus;
+  entryKind: DiscoveryEntryKind;
+  executable: HostPath | null;
+  runtime: HostPath | null;
+  entryScript: HostPath | null;
+  version: string | null;
+  versionSource: "probe" | "none";
+  probe: ProbeView;
+  configProfileId: string;
+  configProfileStatus: "confirmed" | "unconfirmed";
+  issueCode: string | null;
+  issueReason: string | null;
+  discoveredFrom: string;
+  discoveredAt: string;
+  lastSeenScan: number;
+}
+
+export interface ProcessDiscoveryView {
+  identity: ProcessIdentity | null;
+  pid: number | null;
+  agentId: string | null;
+  product: string | null;
+  installationId: string | null;
+  entryKind: DiscoveryEntryKind | null;
+  recognition: RecognitionStrength | null;
+  evidence: string[];
+  state: ProcessState;
+  freshness: Freshness;
+  stateReason: string | null;
+  executable: HostPath | null;
+  redactedCommand: string | null;
+  parentIdentity: ProcessIdentity | null;
+  parentNote: string | null;
+  sourceProgram: string | null;
+  workspaceId: string | null;
+  workspaceEvidence: string | null;
+  /** Always null in S02; an observation view never claims a chat session. */
+  sessionId: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastSeenScan: number;
+}
+
+export interface ScanView {
+  generation: number;
+  status: ScanStatus;
+  inFlight: boolean;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  error: AppError | null;
+  installError: AppError | null;
+  intervalMs: number;
+  scope: string;
+  sampledProcesses: number;
+  unreadableProcesses: number;
+  trackedProcesses: number;
+  note: string;
+}
+
+export interface ProcessDiscoveryPage {
+  items: ProcessDiscoveryView[];
+  nextCursor: string | null;
+  total: number;
+  scan: ScanView;
+}
+
+export interface InstallationQuery extends PageQuery {
+  agentId?: string | null;
+}
+
+export interface ProcessQuery extends PageQuery {
+  agentId?: string | null;
+  workspaceId?: string | null;
+  state?: ProcessState | null;
+}
+
+export interface DiscoverySettings {
+  intervalMs: number;
+  minIntervalMs: number;
+  maxIntervalMs: number;
+  note: string;
 }
 
 export const MAX_PAGE_LIMIT = 200;

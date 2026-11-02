@@ -12,7 +12,14 @@ import type {
   CapabilityName,
   CapabilityQuery,
   DiagnosticsExport,
+  DiscoverySettings,
+  InstallationDiscoveryView,
+  InstallationQuery,
   Page,
+  ProcessDiscoveryPage,
+  ProcessDiscoveryView,
+  ProcessQuery,
+  ScanView,
   SessionDetail,
   SessionQuery,
   SessionSummary,
@@ -143,6 +150,96 @@ const page = <T,>(items: T[], nextCursor: string | null = null): Page<T> => ({
   total: items.length,
 });
 
+const idleScan = (overrides: Partial<ScanView> = {}): ScanView => ({
+  generation: 0,
+  status: "idle",
+  inFlight: false,
+  lastAttemptAt: null,
+  lastSuccessAt: null,
+  error: null,
+  installError: null,
+  intervalMs: 3000,
+  scope: "local-windows",
+  sampledProcesses: 0,
+  unreadableProcesses: 0,
+  trackedProcesses: 0,
+  note: "Sampled periodically; processes shorter than the scan interval can be missed. Not an audit log.",
+  ...overrides,
+});
+
+const installationView = (
+  overrides: Partial<InstallationDiscoveryView> = {},
+): InstallationDiscoveryView => ({
+  installationId: "install-1",
+  agentId: "codex",
+  product: "Codex CLI",
+  signatureId: "codex-cli",
+  status: "installed",
+  entryKind: "native-exe",
+  executable: {
+    hostId: "local-windows",
+    displayPath: "C:\\Tools\\codex.exe",
+    canonicalPath: "C:\\Tools\\codex.exe",
+  },
+  runtime: null,
+  entryScript: null,
+  version: "0.166.0",
+  versionSource: "probe",
+  probe: {
+    status: "ok",
+    reason: null,
+    checkedAt: "2026-11-02T01:00:00.000Z",
+    durationMs: 120,
+    arguments: ["--version"],
+  },
+  configProfileId: "unconfirmed-local",
+  configProfileStatus: "unconfirmed",
+  issueCode: null,
+  issueReason: null,
+  discoveredFrom: "path",
+  discoveredAt: "2026-11-02T01:00:00.000Z",
+  lastSeenScan: 1,
+  ...overrides,
+});
+
+const processView = (overrides: Partial<ProcessDiscoveryView> = {}): ProcessDiscoveryView => ({
+  identity: {
+    hostId: "local-windows",
+    pid: 4242,
+    creationTime: "2026-11-02T01:00:00.1234567Z",
+  },
+  pid: 4242,
+  agentId: "codex",
+  product: "Codex CLI",
+  installationId: "install-1",
+  entryKind: "native-exe",
+  recognition: "confirmed",
+  evidence: ["installation-exe"],
+  state: "alive",
+  freshness: "fresh",
+  stateReason: null,
+  executable: {
+    hostId: "local-windows",
+    displayPath: "C:\\Tools\\codex.exe",
+    canonicalPath: "C:\\Tools\\codex.exe",
+  },
+  redactedCommand: "codex.exe --model <value> <2 withheld>",
+  parentIdentity: {
+    hostId: "local-windows",
+    pid: 100,
+    creationTime: "2026-11-02T00:59:00.0000001Z",
+  },
+  parentNote: null,
+  sourceProgram: "powershell.exe",
+  workspaceId: null,
+  workspaceEvidence: null,
+  sessionId: null,
+  firstSeenAt: "2026-11-02T01:00:01.000Z",
+  lastSeenAt: "2026-11-02T01:00:04.000Z",
+  lastSeenScan: 1,
+  ...overrides,
+});
+
 class FakeApi implements MultiCliApi {
   workspaces: Page<WorkspaceListItem> = page([]);
   agents: Page<AgentListItem> = page([]);
@@ -166,6 +263,17 @@ class FakeApi implements MultiCliApi {
   listSessionsOverride:
     | ((query: SessionQuery) => Promise<Page<SessionSummary>>)
     | null = null;
+  installations: Page<InstallationDiscoveryView> = page([]);
+  processes: Page<ProcessDiscoveryView> = page([]);
+  scan: ScanView = idleScan();
+  installationFailures = 0;
+  processFailures = 0;
+  refreshFailure: unknown = null;
+  refreshCalls = 0;
+  settingsUpdates: number[] = [];
+  settingsFailure: unknown = null;
+  installationCalls: InstallationQuery[] = [];
+  processCalls: ProcessQuery[] = [];
 
   listWorkspaces(): Promise<Page<WorkspaceListItem>> {
     if (this.workspaceFailures > 0) {
@@ -266,6 +374,81 @@ class FakeApi implements MultiCliApi {
     }
     return Promise.resolve(this.exportResult);
   }
+
+  listInstallations(query: InstallationQuery): Promise<Page<InstallationDiscoveryView>> {
+    this.installationCalls.push(query);
+    if (this.installationFailures > 0) {
+      this.installationFailures -= 1;
+      return Promise.reject({
+        code: "database",
+        message: "installations unavailable",
+        retryable: true,
+        details: { stage: "listInstallations" },
+      });
+    }
+    const items = query.agentId
+      ? this.installations.items.filter((item) => item.agentId === query.agentId)
+      : this.installations.items;
+    return Promise.resolve({ ...this.installations, items, total: items.length });
+  }
+
+  listProcesses(query: ProcessQuery): Promise<ProcessDiscoveryPage> {
+    this.processCalls.push(query);
+    if (this.processFailures > 0) {
+      this.processFailures -= 1;
+      return Promise.reject({
+        code: "io",
+        message: "process enumeration failed",
+        retryable: true,
+        details: { stage: "enumerateProcesses" },
+      });
+    }
+    const items = this.processes.items.filter((item) => {
+      if (query.agentId && item.agentId !== query.agentId) return false;
+      if (query.state && item.state !== query.state) return false;
+      return true;
+    });
+    return Promise.resolve({
+      items,
+      nextCursor: this.processes.nextCursor,
+      total: items.length,
+      scan: this.scan,
+    });
+  }
+
+  refreshDiscovery(): Promise<ScanView> {
+    this.refreshCalls += 1;
+    if (this.refreshFailure) {
+      const failure = this.refreshFailure;
+      this.refreshFailure = null;
+      return Promise.reject(failure);
+    }
+    if (this.scan.generation === 0) {
+      this.scan = idleScan({
+        generation: 1,
+        status: "ok",
+        lastAttemptAt: "2026-11-02T01:00:00.000Z",
+        lastSuccessAt: "2026-11-02T01:00:00.000Z",
+        sampledProcesses: 220,
+        trackedProcesses: 1,
+      });
+    }
+    return Promise.resolve(this.scan);
+  }
+
+  updateDiscoverySettings(intervalMs: number): Promise<DiscoverySettings> {
+    this.settingsUpdates.push(intervalMs);
+    if (this.settingsFailure) {
+      return Promise.reject(this.settingsFailure);
+    }
+    this.scan = { ...this.scan, intervalMs };
+    return Promise.resolve({
+      intervalMs,
+      minIntervalMs: 1000,
+      maxIntervalMs: 60000,
+      note: "bounded",
+    });
+  }
 }
 
 async function flush(): Promise<void> {
@@ -303,6 +486,14 @@ async function renderApp(api: MultiCliApi): Promise<Rendered> {
 
 function byTestId<T extends Element = HTMLElement>(container: HTMLElement, id: string): T | null {
   return container.querySelector<T>(`[data-testid="${id}"]`);
+}
+
+/** Rows carry an index because one product can have several installations. */
+function byTestIdPrefix<T extends Element = HTMLElement>(
+  container: HTMLElement,
+  prefix: string,
+): T | null {
+  return container.querySelector<T>(`[data-testid^="${prefix}"]`);
 }
 
 async function click(element: Element | null): Promise<void> {
@@ -571,5 +762,181 @@ describe("S01 navigation app", () => {
     expect(byTestId(rendered.container, "export-error")).not.toBeNull();
     expect(byTestId(rendered.container, "export-error-code")?.textContent).toBe("io");
     expect(byTestId(rendered.container, "export-result")).toBeNull();
+  });
+});
+
+async function selectValue(element: HTMLSelectElement | null, value: string): Promise<void> {
+  if (!element) {
+    throw new Error("select element is missing");
+  }
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+  await act(async () => {
+    setter?.call(element, value);
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await flush();
+}
+
+describe("S02 discovery views", () => {
+  it("separates install status, version and probe state, and marks the profile unconfirmed", async () => {
+    const api = new FakeApi();
+    api.installations = page([
+      installationView(),
+      installationView({
+        installationId: "install-2",
+        agentId: "claude",
+        product: "Claude Code",
+        signatureId: "claude-code",
+        status: "missing-target",
+        version: null,
+        versionSource: "none",
+        probe: {
+          status: "not-attempted",
+          reason: "no probe has run for this entry",
+          checkedAt: null,
+          durationMs: null,
+          arguments: [],
+        },
+        issueCode: "missing-target",
+        issueReason: "shim target does not exist",
+      }),
+      installationView({
+        installationId: "install-3",
+        agentId: "codebuddy",
+        product: "CodeBuddy Code",
+        signatureId: "codebuddy-code",
+        status: "historical-residue",
+        entryKind: "node-package",
+        version: null,
+        versionSource: "none",
+      }),
+    ]);
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-installations"));
+
+    expect(byTestId(rendered.container, "installations-view")).not.toBeNull();
+    expect(byTestIdPrefix(rendered.container, "installation-row-codex")).not.toBeNull();
+    expect(byTestIdPrefix(rendered.container, "installation-version-codex")?.textContent).toBe(
+      "0.166.0",
+    );
+    expect(byTestIdPrefix(rendered.container, "installation-status-claude")?.textContent).toContain(
+      "missing-target",
+    );
+    expect(
+      byTestIdPrefix(rendered.container, "installation-status-codebuddy")?.textContent,
+    ).toContain("historical-residue");
+    const text = rendered.container.textContent ?? "";
+    expect(text).toContain("unconfirmed-local");
+    expect(text).toContain("shim target does not exist");
+    // A version is never invented when the probe did not succeed.
+    expect(byTestIdPrefix(rendered.container, "installation-version-claude")?.textContent).toBe(
+      "未取得",
+    );
+  });
+
+  it("keeps an installation error visible and retries it", async () => {
+    const api = new FakeApi();
+    // The view reloads once the first scan generation arrives, so a broken
+    // backend fails both of those reads before the user retries.
+    api.installationFailures = 2;
+    api.installations = page([installationView()]);
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-installations"));
+    expect(byTestId(rendered.container, "installations-error")).not.toBeNull();
+    expect(byTestId(rendered.container, "installations-empty")).toBeNull();
+    await click(byTestId(rendered.container, "installations-retry"));
+    expect(byTestId(rendered.container, "installations-error")).toBeNull();
+    expect(byTestIdPrefix(rendered.container, "installation-row-codex")).not.toBeNull();
+  });
+
+  it("shows an unconfirmed process candidate without inventing an identity or a session", async () => {
+    const api = new FakeApi();
+    api.processes = page([
+      processView(),
+      processView({
+        identity: null,
+        pid: 5151,
+        agentId: "claude",
+        product: "Claude Code",
+        installationId: null,
+        entryKind: null,
+        recognition: null,
+        evidence: ["path-entry+filename"],
+        state: "unknown",
+        freshness: "stale",
+        stateReason: "access-denied",
+        parentIdentity: null,
+        parentNote: "identity-unconfirmed",
+        sourceProgram: null,
+        workspaceId: null,
+      }),
+    ]);
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-processes"));
+    await flush();
+
+    expect(byTestId(rendered.container, "processes-view")).not.toBeNull();
+    expect(
+      rendered.container.querySelectorAll('[data-testid^="process-row-"]').length,
+    ).toBe(2);
+    expect(byTestId(rendered.container, "process-workspace")?.textContent).toBe("未关联");
+    expect(byTestId(rendered.container, "process-source-program")?.textContent).toBe(
+      "powershell.exe",
+    );
+    expect(byTestId(rendered.container, "process-creation-time")?.textContent).toBe(
+      "2026-11-02T01:00:00.1234567Z",
+    );
+    const text = rendered.container.textContent ?? "";
+    expect(text).toContain("未确认候选");
+    expect(text).toContain("access-denied");
+    expect(text).not.toContain("session");
+    // Read-only: no control that could signal an external process.
+    for (const id of ["process-kill", "process-send", "process-attach", "process-takeover"]) {
+      expect(byTestId(rendered.container, id)).toBeNull();
+    }
+  });
+
+  it("surfaces a whole-scan failure and recovers on retry", async () => {
+    const api = new FakeApi();
+    api.refreshFailure = {
+      code: "io",
+      message: "process enumeration failed",
+      retryable: true,
+      details: { stage: "enumerateProcesses" },
+    };
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-processes"));
+    await flush();
+    expect(byTestId(rendered.container, "scan-error")).not.toBeNull();
+    expect(byTestId(rendered.container, "scan-error-code")?.textContent).toBe("io");
+    await click(byTestId(rendered.container, "scan-retry"));
+    expect(byTestId(rendered.container, "scan-error")).toBeNull();
+    expect(byTestId(rendered.container, "scan-status-badge")?.textContent).toBe("正常");
+  });
+
+  it("changes the bounded scan interval through the settings command", async () => {
+    const api = new FakeApi();
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-processes"));
+    await flush();
+    await selectValue(
+      byTestId<HTMLSelectElement>(rendered.container, "scan-interval"),
+      "10000",
+    );
+    expect(api.settingsUpdates).toEqual([10000]);
+  });
+
+  it("keeps the S01 session entry working next to the discovery entries", async () => {
+    const api = new FakeApi();
+    api.workspaces = page([workspace("ws-1", "C:\\Work\\Alpha")]);
+    api.sessions = page([summary("s-1", "a-1", "导航回归")]);
+    api.details["s-1"] = detail("s-1", "a-1", "导航回归");
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-processes"));
+    await click(byTestId(rendered.container, "view-sessions"));
+    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await click(byTestId(rendered.container, "session-row-s-1"));
+    expect(byTestId(rendered.container, "detail-session-id")?.textContent).toBe("s-1");
+    expect(byTestId(rendered.container, "detail-count-messages")?.textContent).toBe("2");
   });
 });

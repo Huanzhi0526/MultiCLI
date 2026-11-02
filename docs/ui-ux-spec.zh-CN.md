@@ -12,6 +12,21 @@
 
 文案通过现有 i18next 机制及 `src/i18n/multicli.ts` 提供。未启用上游 App/bootstrap 的插件、遥测、远程和更新入口。测试数据只能由 `src-tauri/examples/multicli_fixture.rs` 显式写入 test profile 或 scratch 合成根，正式启动不生成演示数据。
 
+
+## MultiCLI S02 派生说明
+
+顶部新增三个视图页签：**会话 / 安装 / 外部进程**。会话页仍是 S01 的三栏只读导航（工作区 / Agent 两个入口打开同一会话），代码移到 `src/multicli/SessionBrowser.tsx`，testid 与行为不变。安装页与外部进程页是 S02 新增的只读入口，与 `multicli_list_installations` / `multicli_list_processes` / `multicli_refresh_discovery` 一一对应。
+
+**扫描状态条**（两个发现页共用，`src/multicli/discovery/controls.tsx`）：显示 `status`（idle / scanning / ok / partial / error）、`generation`、`lastAttemptAt`、`lastSuccessAt`、采样/跟踪/不可读计数、扫描间隔下拉（3/5/10/30 秒）与「立即刷新」。任何失败都显示真实 `AppError`（`code` / `message` / `retryable` / `details`）与重试；整次失败时旧条目保留为 `stale`，不显示为空列表。固定说明写明「按间隔采样，短于间隔的进程可能漏见，不是审计级全量记录」，不允许删掉这句。
+
+**安装页**每行显示产品、`agentId`、安装状态（`installed` / `unverified` / `missing-target` / `historical-residue`）、入口形态、入口路径、包入口与运行时、版本与版本来源、探测状态/时间/原因、`configProfileId` 与「配置 profile 未确认」徽标、发现来源与时间、最近扫描代次。版本只在探测成功时显示；探测失败保留原因并把版本留空，不能显示为「未安装」。
+
+**外部进程页**每行显示 `state`（alive / exited / unknown）与 `freshness`（fresh / stale）两个独立徽标、产品与 `agentId`、PID、识别强度与证据、身份三元组（hostId · pid · creationTime，7 位小数）、来源程序与父进程、关联工作区（未关联时明写「未关联」）、脱敏命令、首次/最近发现时间。`identity` 为空时显示「未确认候选」，不显示伪造的创建时间。**没有**发送、接管、kill 或伪终端按钮，页脚常驻只读说明。
+
+筛选（Agent / 状态）变化重置游标并重新读取第一页；分页仍按 id 去重、旧响应丢弃。外部进程页在无「加载更多」时按扫描间隔自动重读第一页；一旦用户加载了后续页就暂停自动刷新，避免游标跨扫描代次失效。跨代次游标由后端返回 `conflict`，前端显示错误并允许重读第一页。
+
+设置只改本 profile 自有目录的扫描间隔（1–60 秒），不写任何 CLI 配置、注册表或系统代理。窗口真正退出时结束自有采样线程，不影响外部 CLI。
+
 > **版本**：v0.1（首版，随实现增量维护）
 > **适用范围**：`src/styles`、`src/components`、`src/features` 中所有用户可见的界面与交互
 > **关联代码**：`src/styles/theme.css`（设计 token）、`src/styles/typography.css`（文本样式）、`src/components/base/*`（基础组件）、`src/i18n/{zh,en}.ts`（文案）
@@ -324,6 +339,9 @@ const feedback = useRunningFeedback(store.loading);
 | 入口 | 文件 | 反馈接入 | 备注 |
 |---|---|---|---|
 | 变更（git）刷新 | `src/features/git/ChangesPanelHeader.tsx` | `useActionFeedback({ spin: true })` | **参考实现**；pull/push 只做 click → 对号 |
+| MultiCLI 发现扫描 | `src/multicli/discovery/controls.tsx`（`ScanStatusBar`）、`src/multicli/discovery/useDiscoveryScan.ts` | 文字按钮 disabled + 状态条徽标切到「扫描中」 | 调用 `multicli_refresh_discovery`；后端合并在途扫描，不并行开第二个扫描器。失败保留旧条目并标 `stale`，状态条显示真实 `AppError` 与重试 |
+| MultiCLI 安装列表刷新 | `src/multicli/discovery/InstallationsView.tsx` | 文字按钮 disabled + 面板自身加载态 | 扫描完成后按新代次重读第一页；失败保留旧行并在面板内显示真实 `AppError` 与重试 |
+| MultiCLI 外部进程自动重读 | `src/multicli/discovery/ProcessesView.tsx` | 无按钮（状态驱动） | 无后续页时按扫描间隔重读第一页；已加载后续页时暂停，避免游标跨代次 |
 | MultiCLI 会话列表刷新 | `src/multicli/components.tsx`（`SessionList`）、`src/multicli/App.tsx` | 文字按钮 disabled + 列表面板自身加载态（不进 §4.1 图标反馈） | 重读当前筛选第一页，并重读已选会话详情与能力；失败保留旧列表并在面板内显示真实 `AppError` 与重试。筛选变化是重置游标的一次重新读取，不走此按钮 |
 | 文件树刷新 | `src/features/files/FileTreeRow.tsx` | `useRunningFeedback(filesStore.refreshing)` | 入口在工作区根行（合成根节点），随该行悬停出现（同该行「添加到聊天」加号）；刷新可能由别处触发，故走状态驱动 |
 | 插件市场索引 | `src/features/plugins/hub/PluginMarketView.tsx` | `useActionFeedback` | 图标按钮位于筛选工具条（分类 chips + 排序 + 搜索）右侧；`isFailure` 读 `marketplaceStore.error`。一次刷新同时重读索引与 `featured.json`（精选是软依赖：拉不到只清空轮播，不写 `error`） |

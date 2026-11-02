@@ -9,8 +9,14 @@ import type {
   Capability,
   CapabilityQuery,
   DiagnosticsExport,
+  DiscoverySettings,
+  InstallationDiscoveryView,
+  InstallationQuery,
   Page,
   PageQuery,
+  ProcessDiscoveryPage,
+  ProcessQuery,
+  ScanView,
   SessionDetail,
   SessionQuery,
   SessionSummary,
@@ -26,6 +32,10 @@ export interface MultiCliApi {
   getSession(sessionId: string): Promise<SessionDetail>;
   listCapabilities(query: CapabilityQuery): Promise<Page<Capability>>;
   exportDiagnostics(): Promise<DiagnosticsExport>;
+  listInstallations(query: InstallationQuery): Promise<Page<InstallationDiscoveryView>>;
+  listProcesses(query: ProcessQuery): Promise<ProcessDiscoveryPage>;
+  refreshDiscovery(): Promise<ScanView>;
+  updateDiscoverySettings(intervalMs: number): Promise<DiscoverySettings>;
 }
 
 function pageArgs(query: PageQuery): Record<string, unknown> {
@@ -72,6 +82,27 @@ export function createMultiCliApi(invokeFn: InvokeFn): MultiCliApi {
       }),
     exportDiagnostics: () =>
       invokeFn<DiagnosticsExport>("multicli_export_diagnostics"),
+    listInstallations: (query) =>
+      invokeFn<Page<InstallationDiscoveryView>>("multicli_list_installations", {
+        query: {
+          ...(query.agentId ? { agentId: query.agentId } : {}),
+          ...pageArgs(query),
+        },
+      }),
+    listProcesses: (query) =>
+      invokeFn<ProcessDiscoveryPage>("multicli_list_processes", {
+        query: {
+          ...(query.agentId ? { agentId: query.agentId } : {}),
+          ...(query.workspaceId ? { workspaceId: query.workspaceId } : {}),
+          ...(query.state ? { state: query.state } : {}),
+          ...pageArgs(query),
+        },
+      }),
+    refreshDiscovery: () => invokeFn<ScanView>("multicli_refresh_discovery"),
+    updateDiscoverySettings: (intervalMs) =>
+      invokeFn<DiscoverySettings>("multicli_update_discovery_settings", {
+        query: { intervalMs },
+      }),
   };
 }
 

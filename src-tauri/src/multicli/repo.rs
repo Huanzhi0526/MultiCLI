@@ -310,16 +310,25 @@ pub(crate) fn ensure_workspace_by_identity(
     conn: &mut Connection,
     workspace: &Workspace,
 ) -> Result<Workspace, AppError> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let stored = ensure_workspace_by_identity_in(&tx, workspace)?;
+    tx.commit()?;
+    Ok(stored)
+}
+
+/// Transaction-aware workspace registration used by history import.
+pub(crate) fn ensure_workspace_by_identity_in(
+    conn: &Connection,
+    workspace: &Workspace,
+) -> Result<Workspace, AppError> {
     let canonical =
         workspace.path.canonical_path.as_deref().ok_or_else(|| {
             AppError::invalid_argument("canonicalPath", "workspace must be resolved")
         })?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Some(existing) = find_workspace_by_canonical(&tx, &workspace.path.host_id, canonical)? {
-        tx.commit()?;
+    if let Some(existing) = find_workspace_by_canonical(conn, &workspace.path.host_id, canonical)? {
         return Ok(existing);
     }
-    let inserted = tx.execute(
+    let inserted = conn.execute(
         "INSERT INTO workspaces(
              id, host_id, display_path, canonical_path, repo_group_id, worktree_id, created_at_ms
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -337,15 +346,13 @@ pub(crate) fn ensure_workspace_by_identity(
         let mapped = AppError::from(error);
         if mapped.code == ErrorCode::Conflict {
             if let Some(existing) =
-                find_workspace_by_canonical(&tx, &workspace.path.host_id, canonical)?
+                find_workspace_by_canonical(conn, &workspace.path.host_id, canonical)?
             {
-                tx.commit()?;
                 return Ok(existing);
             }
         }
         return Err(mapped);
     }
-    tx.commit()?;
     Ok(workspace.clone())
 }
 
@@ -380,29 +387,40 @@ pub(crate) fn ensure_session(
     created_at_ms: i64,
 ) -> Result<Session, AppError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Some(existing) = read_session(&tx, &session.id)? {
+    let stored = ensure_session_in(&tx, session, created_at_ms)?;
+    tx.commit()?;
+    Ok(stored)
+}
+
+/// Transaction-aware variant. History import must commit its messages, FTS
+/// rows, provenance and file cursor together, so it calls this instead of
+/// opening a nested write transaction (which SQLite would reject).
+pub(crate) fn ensure_session_in(
+    conn: &Connection,
+    session: &Session,
+    created_at_ms: i64,
+) -> Result<Session, AppError> {
+    if let Some(existing) = read_session(conn, &session.id)? {
         if !same_session_identity(&existing, session) {
             return Err(AppError::conflict(
                 "session",
                 "id is already used by a different native identity, origin, agent or host",
             ));
         }
-        tx.commit()?;
         return Ok(existing);
     }
     if let Some(native_id) = session.native_id.as_deref() {
-        if let Some(existing) = read_session_by_native(&tx, &session.source_namespace, native_id)? {
+        if let Some(existing) = read_session_by_native(conn, &session.source_namespace, native_id)? {
             if existing.agent_id != session.agent_id || existing.host_id != session.host_id {
                 return Err(AppError::conflict(
                     "session",
                     "native identity is already attributed to a different agent or host",
                 ));
             }
-            tx.commit()?;
             return Ok(existing);
         }
     }
-    tx.execute(
+    conn.execute(
         "INSERT INTO sessions(
              id, agent_id, host_id, source_namespace, native_id, origin, title, created_at_ms
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -417,8 +435,24 @@ pub(crate) fn ensure_session(
             created_at_ms,
         ],
     )?;
-    tx.commit()?;
     Ok(session.clone())
+}
+
+/// Replaces the display title only when the caller has stronger evidence than
+/// the stored title (a native title replaces a first-message guess).
+pub(crate) fn set_session_title(
+    conn: &Connection,
+    session_id: &str,
+    title: &str,
+) -> Result<(), AppError> {
+    if title.trim().is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE sessions SET title = ?2 WHERE id = ?1 AND title <> ?2",
+        params![session_id, title],
+    )?;
+    Ok(())
 }
 
 fn read_session(conn: &Connection, id: &str) -> Result<Option<Session>, AppError> {
@@ -456,7 +490,18 @@ pub(crate) fn attach_workspace(
     link: &SessionWorkspace,
 ) -> Result<SessionWorkspace, AppError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let hosts: Option<(String, String)> = tx
+    let stored = attach_workspace_in(&tx, link)?;
+    tx.commit()?;
+    Ok(stored)
+}
+
+/// Transaction-aware workspace link. Used by history ingest so the session,
+/// message, provenance and workspace evidence land in one commit.
+pub(crate) fn attach_workspace_in(
+    conn: &Connection,
+    link: &SessionWorkspace,
+) -> Result<SessionWorkspace, AppError> {
+    let hosts: Option<(String, String)> = conn
         .query_row(
             "SELECT s.host_id, w.host_id FROM sessions s
              JOIN workspaces w ON w.id = ?2 WHERE s.id = ?1",
@@ -474,7 +519,7 @@ pub(crate) fn attach_workspace(
         ));
     }
     contextual(
-        tx.execute(
+        conn.execute(
             "INSERT INTO session_workspaces(session_id, workspace_id, role, evidence, created_at_ms)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_id, workspace_id) DO UPDATE SET
@@ -490,22 +535,19 @@ pub(crate) fn attach_workspace(
         ),
         "session already has a different primary workspace",
     )?;
-    let stored = tx
-        .query_row(
-            "SELECT session_id, workspace_id, role, evidence
-             FROM session_workspaces WHERE session_id = ?1 AND workspace_id = ?2",
-            params![link.session_id.as_str(), link.workspace_id.as_str()],
-            map_session_workspace,
+    conn.query_row(
+        "SELECT session_id, workspace_id, role, evidence
+         FROM session_workspaces WHERE session_id = ?1 AND workspace_id = ?2",
+        params![link.session_id.as_str(), link.workspace_id.as_str()],
+        map_session_workspace,
+    )
+    .optional()?
+    .ok_or_else(|| {
+        AppError::new(
+            ErrorCode::Database,
+            "session workspace link disappeared after write",
         )
-        .optional()?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::Database,
-                "session workspace link disappeared after write",
-            )
-        })?;
-    tx.commit()?;
-    Ok(stored)
+    })
 }
 
 fn map_session_workspace(row: &Row<'_>) -> rusqlite::Result<SessionWorkspace> {
@@ -1282,10 +1324,29 @@ pub(crate) fn insert_message(
     conn: &mut Connection,
     message: &Message,
 ) -> Result<Message, AppError> {
-    let content_json = serde_json::to_string(&message.content)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let stored = insert_message_in(&tx, message)?;
+    tx.commit()?;
+    Ok(stored)
+}
+
+/// Transaction-aware message insert. `inserted` is false when the deterministic
+/// id (or the `(session, sourceKey)` uniqueness) already existed, which is what
+/// makes a repeated history import idempotent.
+pub(crate) fn insert_message_in(
+    conn: &Connection,
+    message: &Message,
+) -> Result<Message, AppError> {
+    Ok(insert_message_with_flag_in(conn, message)?.0)
+}
+
+pub(crate) fn insert_message_with_flag_in(
+    conn: &Connection,
+    message: &Message,
+) -> Result<(Message, bool), AppError> {
+    let content_json = serde_json::to_string(&message.content)?;
     if let Some(run_id) = message.run_id.as_deref() {
-        let run_session: Option<String> = tx
+        let run_session: Option<String> = conn
             .query_row(
                 "SELECT session_id FROM runs WHERE id = ?1",
                 [run_id],
@@ -1316,7 +1377,7 @@ pub(crate) fn insert_message(
             })));
         }
     }
-    let inserted = tx.execute(
+    let inserted = conn.execute(
         "INSERT INTO messages(
              id, session_id, run_id, native_event_id, source_key, seq, kind,
              content_json, source_ref, observed_at, created_at_ms
@@ -1337,13 +1398,12 @@ pub(crate) fn insert_message(
         ],
     )?;
     if inserted == 1 {
-        tx.commit()?;
-        return Ok(message.clone());
+        return Ok((message.clone(), true));
     }
-    let stored = match read_message_by_source_key(&tx, &message.session_id, &message.source_key)? {
+    let stored = match read_message_by_source_key(conn, &message.session_id, &message.source_key)? {
         Some(stored) => stored,
         None => match message.native_event_id.as_deref() {
-            Some(native_id) => read_message_by_native(&tx, &message.session_id, native_id)?
+            Some(native_id) => read_message_by_native(conn, &message.session_id, native_id)?
                 .ok_or_else(|| {
                     AppError::conflict(
                         "message",
@@ -1358,8 +1418,7 @@ pub(crate) fn insert_message(
             }
         },
     };
-    tx.commit()?;
-    Ok(stored)
+    Ok((stored, false))
 }
 
 fn read_message_by_source_key(
@@ -1621,5 +1680,298 @@ pub(crate) fn messages_for_session(
          ORDER BY observed_at, seq, id",
     )?;
     let rows = statement.query_map([session_id], map_message)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+// ---------------------------------------------------------------------------
+// Bounded message reads (S03)
+// ---------------------------------------------------------------------------
+
+/// Stable position of a message inside its session timeline. Timestamps are
+/// stored as canonical UTC with milliseconds, so a plain string comparison is
+/// also a chronological comparison.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MessagePosition {
+    pub(crate) observed_at: String,
+    pub(crate) seq: u64,
+    pub(crate) id: String,
+}
+
+const MESSAGE_COLUMNS: &str =
+    "id, session_id, run_id, native_event_id, source_key, seq, kind, content_json, source_ref, observed_at";
+
+pub(crate) fn message_position(
+    conn: &Connection,
+    session_id: &str,
+    message_id: &str,
+) -> Result<Option<(MessagePosition, u64)>, AppError> {
+    let row: Option<(String, i64, String)> = conn
+        .query_row(
+            "SELECT observed_at, seq, id FROM messages WHERE session_id = ?1 AND id = ?2",
+            params![session_id, message_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((observed_at, seq, id)) = row else {
+        return Ok(None);
+    };
+    let offset: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM messages
+         WHERE session_id = ?1 AND (
+             observed_at < ?2
+             OR (observed_at = ?2 AND (
+                 seq < ?3 OR (seq = ?3 AND id < ?4)
+             ))
+         )",
+        params![session_id, observed_at.as_str(), seq, id.as_str()],
+        |row| row.get(0),
+    )?;
+    Ok(Some((
+        MessagePosition {
+            observed_at,
+            seq: u64::try_from(seq).unwrap_or(0),
+            id,
+        },
+        u64::try_from(offset).unwrap_or(0),
+    )))
+}
+
+/// Forward page of messages in `(observedAt, seq, id)` order.
+pub(crate) fn session_messages_page(
+    conn: &Connection,
+    session_id: &str,
+    cursor: Option<&MessagePosition>,
+    offset: Option<u64>,
+    fetch_limit: usize,
+) -> Result<(Vec<Message>, u64), AppError> {
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    let mut sql = format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE session_id = ?1");
+    let mut values = vec![Value::Text(session_id.to_string())];
+    if let Some(position) = cursor {
+        sql.push_str(
+            " AND (observed_at > ? OR (observed_at = ? AND (
+                 seq > ? OR (seq = ? AND id > ?)
+             )))",
+        );
+        values.push(Value::Text(position.observed_at.clone()));
+        values.push(Value::Text(position.observed_at.clone()));
+        values.push(Value::Integer(position.seq as i64));
+        values.push(Value::Integer(position.seq as i64));
+        values.push(Value::Text(position.id.clone()));
+    }
+    sql.push_str(" ORDER BY observed_at, seq, id LIMIT ?");
+    values.push(Value::Integer(fetch_limit as i64));
+    if let Some(offset) = offset {
+        sql.push_str(" OFFSET ?");
+        values.push(Value::Integer(offset.min(i64::MAX as u64) as i64));
+    }
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), map_message)?;
+    let rows = rows.collect::<Result<Vec<_>, _>>()?;
+    Ok((rows, count_u64(total)))
+}
+
+pub(crate) fn message_kind_counts(
+    conn: &Connection,
+    session_id: &str,
+    limit: usize,
+) -> Result<Vec<(String, u64)>, AppError> {
+    let mut statement = conn.prepare(
+        "SELECT kind, COUNT(*) FROM messages WHERE session_id = ?1
+         GROUP BY kind ORDER BY COUNT(*) DESC, kind LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![session_id, limit as i64], |row| {
+        Ok((row.get::<_, String>(0)?, count_u64(row.get(1)?)))
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub(crate) fn message_time_bounds(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<(Option<String>, Option<String>), AppError> {
+    Ok(conn.query_row(
+        "SELECT MIN(observed_at), MAX(observed_at) FROM messages WHERE session_id = ?1",
+        [session_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?)
+}
+
+pub(crate) fn workspace_by_id(
+    conn: &Connection,
+    workspace_id: &str,
+) -> Result<Option<Workspace>, AppError> {
+    Ok(conn
+        .query_row(
+            "SELECT id, host_id, display_path, canonical_path, repo_group_id, worktree_id
+             FROM workspaces WHERE id = ?1",
+            [workspace_id],
+            map_workspace,
+        )
+        .optional()?)
+}
+
+pub(crate) fn session_workspace_rows(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<(SessionWorkspace, Option<Workspace>)>, AppError> {
+    let mut statement = conn.prepare(
+        "SELECT sw.session_id, sw.workspace_id, sw.role, sw.evidence,
+                w.id, w.host_id, w.display_path, w.canonical_path, w.repo_group_id, w.worktree_id
+         FROM session_workspaces sw
+         LEFT JOIN workspaces w ON w.id = sw.workspace_id
+         WHERE sw.session_id = ?1
+         ORDER BY CASE sw.role WHEN 'primary' THEN 0 ELSE 1 END, sw.workspace_id",
+    )?;
+    let rows = statement.query_map([session_id], |row| {
+        let link = map_session_workspace(row)?;
+        let workspace = match row.get::<_, Option<String>>(4)? {
+            Some(id) => Some(Workspace {
+                id,
+                path: HostPath {
+                    host_id: row.get(5)?,
+                    display_path: row.get(6)?,
+                    canonical_path: row.get::<_, Option<String>>(7)?,
+                },
+                repo_group_id: row.get::<_, Option<String>>(8)?,
+                worktree_id: row.get::<_, Option<String>>(9)?,
+            }),
+            None => None,
+        };
+        Ok((link, workspace))
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Which sources and files actually produced this session's messages.
+pub(crate) fn history_provenance(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<(Vec<String>, u64, Vec<u32>), AppError> {
+    let mut statement = conn.prepare(
+        "SELECT o.source_id, COUNT(DISTINCT o.file_identity), MAX(o.parser_version)
+         FROM history_message_origins o
+         JOIN messages m ON m.id = o.message_id
+         WHERE m.session_id = ?1
+         GROUP BY o.source_id
+         ORDER BY o.source_id",
+    )?;
+    let rows = statement.query_map([session_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            count_u64(row.get::<_, i64>(1)?),
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    let mut sources = Vec::new();
+    let mut files = 0_u64;
+    let mut versions = Vec::new();
+    for row in rows {
+        let (source_id, file_count, parser_version) = row?;
+        sources.push(source_id);
+        files += file_count;
+        let version = u32::try_from(parser_version).unwrap_or(0);
+        if !versions.contains(&version) {
+            versions.push(version);
+        }
+    }
+    versions.sort_unstable();
+    Ok((sources, files, versions))
+}
+
+/// Runs that can still write this session. A finished run is not a conflict;
+/// an active one definitely is.
+pub(crate) fn active_runs_for_session(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<Run>, AppError> {
+    let mut statement = conn.prepare(
+        "SELECT id, session_id, installation_id, transport, ownership, started_at, ended_at,
+                execution_status, interaction_status, evidence_level, evidence
+         FROM runs
+         WHERE session_id = ?1 AND execution_status IN ('starting', 'running', 'stopping')
+         ORDER BY created_at_ms, id",
+    )?;
+    let rows = statement.query_map([session_id], map_run)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub(crate) fn runs_page_for_session(
+    conn: &Connection,
+    session_id: &str,
+    limit: usize,
+) -> Result<(Vec<Run>, u64), AppError> {
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM runs WHERE session_id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    let mut statement = conn.prepare(
+        "SELECT id, session_id, installation_id, transport, ownership, started_at, ended_at,
+                execution_status, interaction_status, evidence_level, evidence
+         FROM runs WHERE session_id = ?1
+         ORDER BY created_at_ms, id LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![session_id, limit as i64], map_run)?;
+    Ok((
+        rows.collect::<Result<Vec<_>, _>>()?,
+        count_u64(total),
+    ))
+}
+
+/// Installations of one agent on one host, used by resume-target resolution.
+/// The caller never guesses a target from an installation that is not stored.
+pub(crate) fn installations_for_agent(
+    conn: &Connection,
+    host_id: &str,
+    agent_id: &str,
+) -> Result<Vec<AgentInstallation>, AppError> {
+    let mut statement = conn.prepare(
+        "SELECT id, host_id, agent_id, executable_display_path,
+                executable_canonical_path, version, config_profile_id
+         FROM agent_installations
+         WHERE host_id = ?1 AND agent_id = ?2
+         ORDER BY created_at_ms, id",
+    )?;
+    let rows = statement.query_map(params![host_id, agent_id], |row| {
+        Ok(AgentInstallation {
+            id: row.get(0)?,
+            host_id: row.get(1)?,
+            agent_id: row.get(2)?,
+            executable: HostPath {
+                host_id: row.get(1)?,
+                display_path: row.get(3)?,
+                canonical_path: row.get::<_, Option<String>>(4)?,
+            },
+            version: row.get::<_, Option<String>>(5)?,
+            config_profile_id: row.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Live external instances of one product. They are *not* linked to a session
+/// (`sessionId` is null in S02), so they can only ever downgrade a resume
+/// target to `unknown`, never prove it is free.
+pub(crate) fn alive_discovery_processes(
+    conn: &Connection,
+    agent_id: &str,
+) -> Result<Vec<(u32, String, Option<String>)>, AppError> {
+    let mut statement = conn.prepare(
+        "SELECT pid, creation_time, workspace_id FROM discovery_processes
+         WHERE agent_id = ?1 AND state = 'alive' AND freshness = 'fresh'
+         ORDER BY last_seen_at DESC, pid",
+    )?;
+    let rows = statement.query_map([agent_id], |row| {
+        Ok((
+            u32::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }

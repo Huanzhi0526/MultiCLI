@@ -10,6 +10,11 @@ use crate::multicli::discovery::{
     DiscoveryEngine, DiscoverySettings, DiscoverySettingsUpdate, InstallationDiscoveryView,
     InstallationQuery, ProcessDiscoveryPage, ProcessQuery, ScanView,
 };
+use crate::multicli::history::{
+    HistoryCandidateView, HistoryEngine, HistoryOverallStatus, HistoryRebuildQuery,
+    HistoryRefreshQuery, HistorySearchQuery, HistorySourceUpdate, HistorySourceView, MessagePage,
+    MessagePageQuery, ResumeTargetView, SearchPage, SessionMetadataView,
+};
 use crate::multicli::{
     AgentListItem, AppError, Capability, CapabilityQuery, DiagnosticsExport, ErrorCode, Host,
     MultiCliService, Page, PageRequest, SessionDetail, SessionQuery, SessionSummary,
@@ -70,6 +75,7 @@ pub struct MultiCliRuntime {
     profile: String,
     state: Mutex<RuntimeState>,
     discovery: Mutex<Option<Arc<DiscoveryEngine>>>,
+    history: Mutex<Option<Arc<HistoryEngine>>>,
 }
 
 #[derive(Default)]
@@ -85,6 +91,7 @@ impl MultiCliRuntime {
             profile,
             state: Mutex::new(RuntimeState::default()),
             discovery: Mutex::new(None),
+            history: Mutex::new(None),
         }
     }
 
@@ -216,10 +223,33 @@ impl MultiCliRuntime {
         Ok(engine)
     }
 
+    /// Lazily creates the history indexer. It reuses the same service and data
+    /// root, opens no second database and starts one background thread that
+    /// only reads the configured roots.
+    pub fn history(&self) -> Result<Arc<HistoryEngine>, AppError> {
+        let mut slot = self.history.lock();
+        if let Some(engine) = slot.as_ref() {
+            return Ok(engine.clone());
+        }
+        let service = self.service()?;
+        let engine = Arc::new(HistoryEngine::new("local-windows", service));
+        engine.start();
+        *slot = Some(engine.clone());
+        Ok(engine)
+    }
+
     /// Ends only the application's own sampling thread. External CLI processes
     /// are untouched.
     pub fn stop_discovery(&self) {
         let slot = self.discovery.lock();
+        if let Some(engine) = slot.as_ref() {
+            engine.stop();
+        }
+    }
+
+    /// Ends only the application's own indexing thread.
+    pub fn stop_history(&self) {
+        let slot = self.history.lock();
         if let Some(engine) = slot.as_ref() {
             engine.stop();
         }
@@ -230,7 +260,7 @@ impl MultiCliRuntime {
 fn multicli_baseline_info(runtime: State<'_, MultiCliRuntime>) -> Result<BaselineInfo, String> {
     Ok(BaselineInfo {
         product: "MultiCLI",
-        stage: "S02 — installation and external process discovery",
+        stage: "S03 — read-only history index and search",
         profile: runtime.profile().to_string(),
         data_root: runtime.root().display().to_string(),
         upstream_commit: "6c46345a727e7c1b57e0dacecb4fe063d88ee8dc",
@@ -431,6 +461,182 @@ fn multicli_update_discovery_settings(
     update_discovery_settings_impl(&engine, &query)
 }
 
+// ---------------------------------------------------------------------------
+// S03 history commands
+// ---------------------------------------------------------------------------
+
+fn list_history_sources_impl(
+    service: &MultiCliService,
+    query: &PageRequest,
+) -> Result<Page<HistorySourceView>, AppError> {
+    crate::multicli::history::query::list_sources_page(service, query)
+}
+
+#[tauri::command]
+fn multicli_list_history_sources(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<Page<HistorySourceView>, AppError> {
+    let query: PageRequest = required_argument(query, "query")?;
+    query.validate()?;
+    let service = runtime.service()?;
+    list_history_sources_impl(&service, &query)
+}
+
+fn list_history_candidates_impl(
+    service: &MultiCliService,
+) -> Result<Vec<HistoryCandidateView>, AppError> {
+    crate::multicli::history::query::list_candidates(service)
+}
+
+/// Known product roots under the user's home. Read-only metadata: a bounded
+/// top-level listing, never a recursive walk and never a file read.
+#[tauri::command]
+fn multicli_list_history_candidates(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<Vec<HistoryCandidateView>, AppError> {
+    let service = runtime.service()?;
+    list_history_candidates_impl(&service)
+}
+
+fn update_history_source_impl(
+    engine: &HistoryEngine,
+    query: &HistorySourceUpdate,
+) -> Result<HistorySourceView, AppError> {
+    engine.update_source(query)
+}
+
+#[tauri::command]
+fn multicli_update_history_source(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<HistorySourceView, AppError> {
+    let query: HistorySourceUpdate = required_argument(query, "query")?;
+    query.validate()?;
+    let engine = runtime.history()?;
+    update_history_source_impl(&engine, &query)
+}
+
+fn refresh_history_impl(
+    engine: &HistoryEngine,
+    query: &HistoryRefreshQuery,
+) -> Result<HistoryOverallStatus, AppError> {
+    engine.refresh(query)
+}
+
+#[tauri::command]
+fn multicli_refresh_history(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<HistoryOverallStatus, AppError> {
+    let query: HistoryRefreshQuery = required_argument(query, "query")?;
+    query.validate()?;
+    let engine = runtime.history()?;
+    refresh_history_impl(&engine, &query)
+}
+
+fn history_status_impl(engine: &HistoryEngine) -> Result<HistoryOverallStatus, AppError> {
+    engine.status()
+}
+
+#[tauri::command]
+fn multicli_get_history_status(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<HistoryOverallStatus, AppError> {
+    let engine = runtime.history()?;
+    history_status_impl(&engine)
+}
+
+fn rebuild_history_impl(
+    engine: &HistoryEngine,
+    query: &HistoryRebuildQuery,
+) -> Result<HistoryOverallStatus, AppError> {
+    engine.rebuild(query)
+}
+
+#[tauri::command]
+fn multicli_rebuild_history_index(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<HistoryOverallStatus, AppError> {
+    let query: HistoryRebuildQuery = required_argument(query, "query")?;
+    query.validate()?;
+    let engine = runtime.history()?;
+    rebuild_history_impl(&engine, &query)
+}
+
+fn session_metadata_impl(
+    service: &MultiCliService,
+    session_id: &str,
+) -> Result<SessionMetadataView, AppError> {
+    crate::multicli::history::query::session_metadata(service, session_id)
+}
+
+#[tauri::command]
+fn multicli_get_session_metadata(
+    session_id: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<SessionMetadataView, AppError> {
+    let session_id: String = required_argument(session_id, "sessionId")?;
+    let service = runtime.service()?;
+    session_metadata_impl(&service, &session_id)
+}
+
+fn session_messages_impl(
+    service: &MultiCliService,
+    query: &MessagePageQuery,
+) -> Result<MessagePage, AppError> {
+    crate::multicli::history::query::message_page(service, query)
+}
+
+#[tauri::command]
+fn multicli_list_session_messages(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<MessagePage, AppError> {
+    let query: MessagePageQuery = required_argument(query, "query")?;
+    query.validate()?;
+    let service = runtime.service()?;
+    session_messages_impl(&service, &query)
+}
+
+fn search_history_impl(
+    service: &MultiCliService,
+    query: &HistorySearchQuery,
+) -> Result<SearchPage, AppError> {
+    crate::multicli::history::query::search_history(service, query)
+}
+
+#[tauri::command]
+fn multicli_search_history(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<SearchPage, AppError> {
+    let query: HistorySearchQuery = required_argument(query, "query")?;
+    query.validate()?;
+    let service = runtime.service()?;
+    search_history_impl(&service, &query)
+}
+
+fn resolve_resume_target_impl(
+    service: &MultiCliService,
+    session_id: &str,
+) -> Result<ResumeTargetView, AppError> {
+    crate::multicli::history::resume::resolve_resume_target(service, session_id)
+}
+
+/// Read-only target resolution. It never starts a process, writes a CLI file or
+/// creates a Run; actual resume execution is S05.
+#[tauri::command]
+fn multicli_resolve_resume_target(
+    session_id: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<ResumeTargetView, AppError> {
+    let session_id: String = required_argument(session_id, "sessionId")?;
+    let service = runtime.service()?;
+    resolve_resume_target_impl(&service, &session_id)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PtySmoke {
@@ -586,7 +792,7 @@ pub fn run() {
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("MultiCLI — S02")
+            .title("MultiCLI — S03")
             .inner_size(1320.0, 820.0)
             .min_inner_size(960.0, 640.0)
             .data_directory(webview_directory)
@@ -605,7 +811,17 @@ pub fn run() {
             multicli_list_installations,
             multicli_list_processes,
             multicli_refresh_discovery,
-            multicli_update_discovery_settings
+            multicli_update_discovery_settings,
+            multicli_list_history_sources,
+            multicli_list_history_candidates,
+            multicli_update_history_source,
+            multicli_refresh_history,
+            multicli_get_history_status,
+            multicli_rebuild_history_index,
+            multicli_get_session_metadata,
+            multicli_list_session_messages,
+            multicli_search_history,
+            multicli_resolve_resume_target
         ])
         .build(tauri::generate_context!())
         .expect("build MultiCLI")
@@ -615,6 +831,7 @@ pub fn run() {
                 // CLIs keep running untouched.
                 if let Some(runtime) = tauri::Manager::try_state::<MultiCliRuntime>(handle) {
                     runtime.stop_discovery();
+                    runtime.stop_history();
                 }
             }
         });
@@ -993,7 +1210,12 @@ mod tests {
         assert_eq!(document["counts"]["sessions"], 1);
         assert_eq!(document["counts"]["messages"], 1);
         assert_eq!(document["counts"]["runs"], 1);
-        assert_eq!(document["database"]["schemaVersion"], 3);
+        // The diagnostics file reports the *real* schema version; pinning a
+        // literal here broke on every migration, so compare with the constant.
+        assert_eq!(
+            document["database"]["schemaVersion"],
+            crate::multicli::SCHEMA_VERSION
+        );
         assert_eq!(document["database"]["journalMode"], "wal");
         let agent = &document["capabilities"]["byAgent"][0];
         assert_eq!(agent["agentId"], "agent-1");

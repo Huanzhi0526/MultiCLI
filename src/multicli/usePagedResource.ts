@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { mergePageItems, RequestGate, toAppError } from "./navigation";
-import type { AppError, Page } from "./types";
+import type {
+  AppError,
+  HistoryProvenanceView,
+  Message,
+  MessagePage,
+  MessagePageQuery,
+  Page,
+  Run,
+  Session,
+  SessionMetadataView,
+  SessionWorkspace,
+} from "./types";
 
 export type LoadStatus = "idle" | "loading" | "ready" | "error" | "loading-more" | "error-more";
 
@@ -206,4 +217,204 @@ export function useDetailResource<T>(
   }, []);
 
   return { ...state, refresh };
+}
+
+/**
+ * A session opened from any entry (workspace, agent or search) is read through
+ * metadata plus a bounded message page.
+ *
+ * `getSession` returns every message of a session in one response, which is
+ * unbounded for a history transcript with tens of thousands of rows. The view
+ * model below is built from `getSessionMetadata` and `listSessionMessages`, so
+ * the same session id, counts and message order are shown everywhere while the
+ * payload stays capped at one page.
+ */
+export const SESSION_DETAIL_PAGE_SIZE = 100;
+
+export interface SessionDetailViewData {
+  session: Session;
+  workspaces: SessionWorkspace[];
+  runs: Run[];
+  messages: Message[];
+  messageCount: number;
+  runCount: number;
+  history: HistoryProvenanceView | null;
+}
+
+export interface SessionDetailResource {
+  data: SessionDetailViewData | null;
+  status: "idle" | "loading" | "ready" | "error";
+  error: AppError | null;
+  hasMore: boolean;
+  loadingMore: boolean;
+  moreError: AppError | null;
+  loadMore: () => void;
+  refresh: () => void;
+}
+
+interface SessionDetailState {
+  data: SessionDetailViewData | null;
+  status: "idle" | "loading" | "ready" | "error";
+  error: AppError | null;
+  cursor: string | null;
+  loadingMore: boolean;
+  moreError: AppError | null;
+}
+
+const EMPTY_DETAIL: SessionDetailState = {
+  data: null,
+  status: "idle",
+  error: null,
+  cursor: null,
+  loadingMore: false,
+  moreError: null,
+};
+
+export interface SessionDetailApi {
+  getSessionMetadata(sessionId: string): Promise<SessionMetadataView>;
+  listSessionMessages(query: MessagePageQuery): Promise<MessagePage>;
+}
+
+export function useSessionDetail(
+  api: SessionDetailApi,
+  sessionId: string | null,
+): SessionDetailResource {
+  const [state, setState] = useState<SessionDetailState>(EMPTY_DETAIL);
+  const [epoch, setEpoch] = useState(0);
+  const gateRef = useRef<RequestGate | null>(null);
+  if (!gateRef.current) {
+    gateRef.current = new RequestGate();
+  }
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  useEffect(() => {
+    const gate = gateRef.current as RequestGate;
+    if (!sessionId) {
+      gate.invalidate();
+      setState(EMPTY_DETAIL);
+      return;
+    }
+    const token = gate.begin();
+    setState({ ...EMPTY_DETAIL, status: "loading" });
+    void Promise.all([
+      apiRef.current.getSessionMetadata(sessionId),
+      apiRef.current.listSessionMessages({
+        sessionId,
+        limit: SESSION_DETAIL_PAGE_SIZE,
+      }),
+    ])
+      .then(([metadata, page]) => {
+        if (!gate.isCurrent(token)) {
+          return;
+        }
+        setState({
+          data: buildSessionDetail(metadata, page.items),
+          status: "ready",
+          error: null,
+          cursor: page.nextCursor,
+          loadingMore: false,
+          moreError: null,
+        });
+      })
+      .catch((raw: unknown) => {
+        if (!gate.isCurrent(token)) {
+          return;
+        }
+        setState({ ...EMPTY_DETAIL, status: "error", error: toAppError(raw) });
+      });
+    return () => {
+      gate.invalidate();
+    };
+  }, [sessionId, epoch]);
+
+  const loadMore = useCallback(() => {
+    const current = stateRef.current;
+    if (
+      !sessionId ||
+      current.status !== "ready" ||
+      !current.cursor ||
+      current.loadingMore
+    ) {
+      return;
+    }
+    const gate = gateRef.current as RequestGate;
+    const token = gate.begin();
+    const cursor = current.cursor;
+    setState((value) => ({ ...value, loadingMore: true, moreError: null }));
+    void apiRef.current
+      .listSessionMessages({
+        sessionId,
+        limit: SESSION_DETAIL_PAGE_SIZE,
+        cursor,
+      })
+      .then((page) => {
+        if (!gate.isCurrent(token)) {
+          return;
+        }
+        setState((value) => ({
+          ...value,
+          data: value.data
+            ? {
+                ...value.data,
+                messages: mergePageItems(
+                  value.data.messages,
+                  page.items,
+                  (message) => message.id,
+                ),
+              }
+            : value.data,
+          cursor: page.nextCursor,
+          loadingMore: false,
+          moreError: null,
+        }));
+      })
+      .catch((raw: unknown) => {
+        if (!gate.isCurrent(token)) {
+          return;
+        }
+        setState((value) => ({
+          ...value,
+          loadingMore: false,
+          moreError: toAppError(raw),
+        }));
+      });
+  }, [sessionId]);
+
+  const refresh = useCallback(() => {
+    setEpoch((value) => value + 1);
+  }, []);
+
+  return {
+    data: state.data,
+    status: state.status,
+    error: state.error,
+    hasMore: state.cursor !== null,
+    loadingMore: state.loadingMore,
+    moreError: state.moreError,
+    loadMore,
+    refresh,
+  };
+}
+
+function buildSessionDetail(
+  metadata: SessionMetadataView,
+  messages: Message[],
+): SessionDetailViewData {
+  return {
+    session: metadata.session,
+    workspaces: metadata.workspaces.map((link) => ({
+      sessionId: metadata.session.id,
+      workspaceId: link.workspaceId,
+      role: link.role,
+      evidence: link.evidence,
+    })),
+    runs: metadata.runs,
+    messages,
+    messageCount: metadata.messageCount,
+    runCount: metadata.runTotal,
+    history: metadata.history,
+  };
 }

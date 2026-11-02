@@ -7,10 +7,11 @@ import { ErrorPanel } from "./components";
 import SessionBrowser from "./SessionBrowser";
 import InstallationsView from "./discovery/InstallationsView";
 import ProcessesView from "./discovery/ProcessesView";
+import HistoryView from "./history/HistoryView";
 import type { AppError, DiagnosticsExport } from "./types";
 import { toAppError } from "./navigation";
 
-export type AppView = "sessions" | "installations" | "processes";
+export type AppView = "sessions" | "history" | "installations" | "processes";
 
 interface ExportState {
   status: "idle" | "pending" | "done" | "error";
@@ -20,6 +21,7 @@ interface ExportState {
 
 const VIEWS: { id: AppView; label: string; testId: string }[] = [
   { id: "sessions", label: "navSessions", testId: "view-sessions" },
+  { id: "history", label: "navHistory", testId: "view-history" },
   { id: "installations", label: "navInstallations", testId: "view-installations" },
   { id: "processes", label: "navProcesses", testId: "view-processes" },
 ];
@@ -114,6 +116,7 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
       </header>
 
       {view === "sessions" ? <SessionBrowser api={api} /> : null}
+      {view === "history" ? <HistoryView api={api} /> : null}
       {view === "installations" ? <InstallationsView api={api} /> : null}
       {view === "processes" ? <ProcessesView api={api} /> : null}
     </div>

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 6;
 
 const DB_FILE_NAME: &str = "multicli.db";
 
@@ -342,6 +342,253 @@ CREATE INDEX ix_discovery_processes_order
     ON discovery_processes(agent_id, last_seen_at DESC, pid);
 "#;
 
+/// Schema v4 — read-only history sources, per-file cursors, derived-index
+/// provenance and the FTS5 search index.
+///
+/// Nothing here stores a copy of a CLI configuration file. A source row records
+/// the user's *choice* of root plus its canonical identity; a cursor records how
+/// far one file was imported and the file identity that proves it is still the
+/// same file. `history_message_origins` is what lets a rebuild remove only the
+/// rows a single source produced while leaving every user-owned note/tag and
+/// every other source untouched.
+///
+/// The FTS table is a normal (not external-content) FTS5 table so a row can be
+/// deleted by `message_id` without a trigger, and a rebuild cannot leave stale
+/// shadows behind. `trigram` is required for Chinese substring search; short
+/// queries (1–2 characters) cannot be answered by a trigram index and fall back
+/// to an escaped `LIKE` scan, which is a deliberate, documented cost.
+const V4_HISTORY_INDEX: &str = r#"
+CREATE TABLE IF NOT EXISTS history_sources(
+    id TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    product TEXT NOT NULL CHECK(length(trim(product)) > 0),
+    installation_id TEXT REFERENCES agent_installations(id) ON DELETE SET NULL,
+    config_profile_id TEXT NOT NULL CHECK(length(trim(config_profile_id)) > 0),
+    root_display_path TEXT NOT NULL CHECK(length(trim(root_display_path)) > 0),
+    root_canonical_path TEXT NOT NULL CHECK(length(trim(root_canonical_path)) > 0),
+    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+    parser_version INTEGER NOT NULL CHECK(parser_version > 0),
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    UNIQUE(host_id, agent_id, config_profile_id, root_canonical_path)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS history_index_state(
+    source_id TEXT PRIMARY KEY REFERENCES history_sources(id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK(status IN (
+        'idle', 'indexing', 'ok', 'partial', 'error', 'cancelled'
+    )),
+    in_flight INTEGER NOT NULL DEFAULT 0 CHECK(in_flight IN (0, 1)),
+    last_attempt_at TEXT CHECK(last_attempt_at IS NULL OR length(trim(last_attempt_at)) > 0),
+    last_success_at TEXT CHECK(last_success_at IS NULL OR length(trim(last_success_at)) > 0),
+    last_error_json TEXT CHECK(last_error_json IS NULL OR json_valid(last_error_json)),
+    files_total INTEGER NOT NULL DEFAULT 0 CHECK(files_total >= 0),
+    files_done INTEGER NOT NULL DEFAULT 0 CHECK(files_done >= 0),
+    files_skipped INTEGER NOT NULL DEFAULT 0 CHECK(files_skipped >= 0),
+    files_failed INTEGER NOT NULL DEFAULT 0 CHECK(files_failed >= 0),
+    messages_indexed INTEGER NOT NULL DEFAULT 0 CHECK(messages_indexed >= 0),
+    bytes_read INTEGER NOT NULL DEFAULT 0 CHECK(bytes_read >= 0),
+    complete INTEGER NOT NULL DEFAULT 0 CHECK(complete IN (0, 1)),
+    note TEXT,
+    updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS history_cursors(
+    source_id TEXT NOT NULL REFERENCES history_sources(id) ON DELETE CASCADE,
+    file_identity TEXT NOT NULL CHECK(length(trim(file_identity)) > 0),
+    display_path TEXT NOT NULL CHECK(length(trim(display_path)) > 0),
+    canonical_path TEXT NOT NULL CHECK(length(trim(canonical_path)) > 0),
+    size_bytes INTEGER NOT NULL CHECK(size_bytes >= 0),
+    mtime_ms INTEGER NOT NULL,
+    head_hash TEXT NOT NULL CHECK(length(trim(head_hash)) > 0),
+    anchor_hash TEXT NOT NULL CHECK(length(trim(anchor_hash)) > 0),
+    committed_offset INTEGER NOT NULL CHECK(committed_offset >= 0),
+    tail_residue TEXT NOT NULL DEFAULT '',
+    tail_residue_truncated INTEGER NOT NULL DEFAULT 0 CHECK(tail_residue_truncated IN (0, 1)),
+    parser_version INTEGER NOT NULL CHECK(parser_version > 0),
+    error_count INTEGER NOT NULL DEFAULT 0 CHECK(error_count >= 0),
+    last_error_json TEXT CHECK(last_error_json IS NULL OR json_valid(last_error_json)),
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(source_id, file_identity)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS ix_history_cursors_path
+    ON history_cursors(source_id, canonical_path);
+
+CREATE TABLE IF NOT EXISTS history_message_origins(
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES history_sources(id) ON DELETE CASCADE,
+    file_identity TEXT NOT NULL CHECK(length(trim(file_identity)) > 0),
+    byte_offset INTEGER NOT NULL CHECK(byte_offset >= 0),
+    line_index INTEGER NOT NULL CHECK(line_index >= 0),
+    parser_version INTEGER NOT NULL CHECK(parser_version > 0),
+    created_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(message_id, source_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS ix_history_origins_file
+    ON history_message_origins(source_id, file_identity);
+
+CREATE TABLE IF NOT EXISTS history_session_facts(
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES history_sources(id) ON DELETE CASCADE,
+    native_id TEXT NOT NULL CHECK(length(trim(native_id)) > 0),
+    title_source TEXT NOT NULL CHECK(title_source IN ('native-title', 'first-user-message', 'none')),
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(session_id, source_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS ix_history_session_facts_native
+    ON history_session_facts(source_id, native_id);
+"#;
+
+const V4_HISTORY_FTS: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS history_message_fts USING fts5(
+    message_id UNINDEXED,
+    session_id UNINDEXED,
+    body,
+    observed_at UNINDEXED,
+    seq UNINDEXED,
+    session_created_at UNINDEXED,
+    tokenize = 'trigram'
+);
+"#;
+
+/// Schema v5 — provenance per contributing file, resumable read state and
+/// content-verification blocks.
+///
+/// Three defects motivated it:
+///
+/// 1. `history_message_origins` was keyed by `(message_id, source_id)`, so two
+///    files of the *same* source that carried the same event overwrote each
+///    other; truncating the last one deleted a message the other still
+///    provided. The primary key now includes `file_identity` and the purge only
+///    removes a message when no origin remains.
+/// 2. A cursor only knew a byte offset, not whether the file had actually been
+///    read to the end, which parser metadata had been derived from its prefix,
+///    or how many lines had been consumed. A pass that stopped on its byte
+///    budget therefore looked "unchanged" forever, and an append restarted the
+///    line counter so fallback event ids collided. The four added columns make
+///    that state explicit and recoverable.
+/// 3. Size + mtime + a 4 KiB prefix/anchor hash cannot see a middle rewrite
+///    that preserves both. Per-block hashes plus a bounded rotating
+///    verification pass give eventual full coverage without re-reading every
+///    file every pass.
+///
+/// Existing v4 rows are migrated in place. Their old cursors have no parser
+/// checkpoint, and the importer deliberately treats that as "resume state
+/// unknown" and re-reads the file once instead of guessing a line counter.
+const V5_HISTORY_INTEGRITY: &str = r#"
+CREATE TABLE history_message_origins_v5(
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES history_sources(id) ON DELETE CASCADE,
+    file_identity TEXT NOT NULL CHECK(length(trim(file_identity)) > 0),
+    byte_offset INTEGER NOT NULL CHECK(byte_offset >= 0),
+    line_index INTEGER NOT NULL CHECK(line_index >= 0),
+    parser_version INTEGER NOT NULL CHECK(parser_version > 0),
+    created_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(message_id, source_id, file_identity)
+) STRICT;
+
+INSERT INTO history_message_origins_v5(
+    message_id, source_id, file_identity, byte_offset, line_index, parser_version, created_at_ms
+)
+SELECT message_id, source_id, file_identity, byte_offset, line_index, parser_version, created_at_ms
+FROM history_message_origins;
+
+DROP TABLE history_message_origins;
+
+ALTER TABLE history_message_origins_v5 RENAME TO history_message_origins;
+
+CREATE INDEX IF NOT EXISTS ix_history_origins_file
+    ON history_message_origins(source_id, file_identity);
+
+CREATE INDEX IF NOT EXISTS ix_history_origins_message
+    ON history_message_origins(message_id);
+
+-- Search pushes the workspace filter down as `session_id IN (...)`, which needs
+-- a workspace-first index on the link table (the primary key is session-first).
+CREATE INDEX IF NOT EXISTS ix_session_workspaces_workspace
+    ON session_workspaces(workspace_id, session_id);
+
+-- The source filter runs `EXISTS (... WHERE message_id = ? AND source_id = ?)`
+-- per FTS row, so the index must lead with source_id and carry message_id.
+CREATE INDEX IF NOT EXISTS ix_history_origins_source_message
+    ON history_message_origins(source_id, message_id);
+
+ALTER TABLE history_cursors ADD COLUMN lines_committed INTEGER NOT NULL DEFAULT 0
+    CHECK(lines_committed >= 0);
+
+ALTER TABLE history_cursors ADD COLUMN read_complete INTEGER NOT NULL DEFAULT 0
+    CHECK(read_complete IN (0, 1));
+
+ALTER TABLE history_cursors ADD COLUMN parser_state_json TEXT
+    CHECK(parser_state_json IS NULL OR json_valid(parser_state_json));
+
+ALTER TABLE history_cursors ADD COLUMN verify_offset INTEGER NOT NULL DEFAULT 0
+    CHECK(verify_offset >= 0);
+
+-- When the last full verification cycle finished. Without it the 8 MiB budget
+-- was spent on the same first files every pass and the tail of a large corpus
+-- never got verified.
+ALTER TABLE history_cursors ADD COLUMN verified_at_ms INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS history_file_blocks(
+    source_id TEXT NOT NULL REFERENCES history_sources(id) ON DELETE CASCADE,
+    file_identity TEXT NOT NULL CHECK(length(trim(file_identity)) > 0),
+    block_index INTEGER NOT NULL CHECK(block_index >= 0),
+    hash TEXT NOT NULL CHECK(length(trim(hash)) > 0),
+    bytes INTEGER NOT NULL CHECK(bytes >= 0),
+    PRIMARY KEY(source_id, file_identity, block_index)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS history_meta(
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) STRICT;
+
+INSERT INTO history_meta(key, value) VALUES ('purgeEpoch', '0')
+ON CONFLICT(key) DO NOTHING;
+"#;
+
+/// Block tables become layered.
+///
+/// v5 kept one hash per 256 KiB of *decoded* content. That is the right unit
+/// for a plain transcript, but a compressed transcript cannot be checked
+/// window by window in decoded space without decoding its whole prefix for
+/// every window, so a large `.zst` could only be verified by decoding all of
+/// it or not at all. The same table now also stores hashes of the *physical*
+/// bytes, which restores the bounded window model for compressed files.
+///
+/// The rewrite is a table rebuild because the primary key changes. Existing
+/// rows are copied as `logical`: they remain the baseline for every plain
+/// transcript and are simply unused by the compressed path, which builds its
+/// physical baseline from the bytes it has just decoded.
+const V6_BLOCK_LAYERS: &str = r#"
+CREATE TABLE history_file_blocks_v6(
+    source_id TEXT NOT NULL REFERENCES history_sources(id) ON DELETE CASCADE,
+    file_identity TEXT NOT NULL CHECK(length(trim(file_identity)) > 0),
+    layer TEXT NOT NULL CHECK(layer IN ('logical', 'physical')),
+    block_index INTEGER NOT NULL CHECK(block_index >= 0),
+    hash TEXT NOT NULL CHECK(length(trim(hash)) > 0),
+    bytes INTEGER NOT NULL CHECK(bytes >= 0),
+    PRIMARY KEY(source_id, file_identity, layer, block_index)
+) STRICT;
+
+INSERT INTO history_file_blocks_v6(
+    source_id, file_identity, layer, block_index, hash, bytes
+)
+SELECT source_id, file_identity, 'logical', block_index, hash, bytes
+FROM history_file_blocks;
+
+DROP TABLE history_file_blocks;
+
+ALTER TABLE history_file_blocks_v6 RENAME TO history_file_blocks;
+"#;
+
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -359,6 +606,24 @@ const MIGRATIONS: &[Migration] = &[
         version: 3,
         description: "installation executable identity and discovery process state",
         statements: &[V3_INSTALLATION_IDENTITY, V3_DISCOVERY_STATE],
+        requires_foreign_keys_off: true,
+    },
+    Migration {
+        version: 4,
+        description: "read-only history sources, cursors, provenance and FTS5 search index",
+        statements: &[V4_HISTORY_INDEX, V4_HISTORY_FTS],
+        requires_foreign_keys_off: false,
+    },
+    Migration {
+        version: 5,
+        description: "per-file provenance, resumable read state and content verification blocks",
+        statements: &[V5_HISTORY_INTEGRITY],
+        requires_foreign_keys_off: true,
+    },
+    Migration {
+        version: 6,
+        description: "logical and physical content-verification layers per file",
+        statements: &[V6_BLOCK_LAYERS],
         requires_foreign_keys_off: true,
     },
 ];

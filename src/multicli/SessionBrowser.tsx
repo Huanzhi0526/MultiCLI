@@ -2,11 +2,10 @@ import { useCallback, useState } from "react";
 import type { MultiCliApi } from "./api";
 import { EntryTabs, ScopeList, SessionDetailView, SessionList } from "./components";
 import { sessionFilterKey } from "./navigation";
-import { useDetailResource, usePagedResource } from "./usePagedResource";
+import { usePagedResource, useSessionDetail } from "./usePagedResource";
 import type {
   AgentListItem,
   Capability,
-  SessionDetail,
   SessionOrigin,
   SessionSummary,
   WorkspaceListItem,
@@ -52,9 +51,10 @@ export default function SessionBrowser({ api }: { api: MultiCliApi }) {
       }),
     (item) => item.session.id,
   );
-  const detail = useDetailResource<SessionDetail>(selectedSessionId, (id) =>
-    api.getSession(id),
-  );
+  // Metadata plus a bounded message page: the same session id and counts from
+  // every entry, without ever loading a transcript of unknown length in one
+  // response.
+  const detail = useSessionDetail(api, selectedSessionId);
   const detailAgentId = detail.data?.session.agentId ?? null;
   const capabilities = usePagedResource<Capability>(
     detailAgentId ? `capabilities|${detailAgentId}` : null,
@@ -161,6 +161,7 @@ export default function SessionBrowser({ api }: { api: MultiCliApi }) {
           detail={detail}
           capabilities={capabilities}
           onRetry={refreshAll}
+          onLoadMore={detail.loadMore}
         />
       </main>
     </div>

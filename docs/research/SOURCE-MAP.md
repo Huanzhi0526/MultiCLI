@@ -1,4 +1,4 @@
-# 实际源码映射（S00–S02）
+# 实际源码映射（S00–S03）
 
 固定上游 `6c46345a727e7c1b57e0dacecb4fe063d88ee8dc`；以下路径相对 app。现存文件与拟新增路径明确分开。
 
@@ -26,3 +26,5 @@ S01 已验收模块：`src-tauri/src/multicli/{domain,error,store,repo,service,p
 S02 已经独立代码、真实 Windows 后端与实窗验收 ACCEPTED。后端 `src-tauri/src/multicli/discovery/` 已存在：signature/wrapper/detect/probe、winproc/classify/snapshot、engine/view/tests。四个发现/设置 IPC 仍在 multicli_bootstrap。schema v3 扩展安装身份并添加 discovery_processes，迁移在 store/repo/service 内。
 
 前端 `src/multicli/SessionBrowser.tsx` 保留 S01 三栏，App.tsx 顶部切换；`src/multicli/discovery/{InstallationsView,ProcessesView,controls,useDiscoveryScan}` 已存在，组件后缀 tsx、hook 后缀 ts。新接口详见 docs/contracts/discovery-v1.md，三份原冻结 schema 未改。没有恢复旧 startup/history/terminal。
+
+S03 已独立验收 ACCEPTED：`src-tauri/src/multicli/history/{model,ids,parser,scan,repo,query,search,resume,engine,guard,tooling,tests}`；前端 `src/multicli/history/{HistoryView,SourcesPanel,SearchPanel,SessionPanel,useHistory}`。工作区/Agent 详情经 `usePagedResource.ts::useSessionDetail` 读取有界 metadata/messages；接口 `docs/contracts/history-v1.md`、格式 `docs/research/HISTORY-FORMATS.md`。schema v6 沿 v3→v4→v5→v6 迁移，逻辑/物理块分层；multicli_bootstrap 仍为唯一启动和 IPC 注册边界。search repo 过滤匹配只 materialize 一次，计数在 cursor 过滤之前，空页保留总数。resume 目前只解析目标/冲突，不执行恢复。S04 托管 terminal 目录及新 IPC 尚未实现，不能把上游文件存在视为产品终端已接通。

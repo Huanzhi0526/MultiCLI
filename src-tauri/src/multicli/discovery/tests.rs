@@ -24,7 +24,12 @@ fn temp_root(name: &str) -> PathBuf {
         uuid::Uuid::new_v4().simple()
     ));
     std::fs::create_dir_all(&path).unwrap();
-    path
+    // The controlled backend should return the same physical image spelling as
+    // the detector. Windows CI may give temp_dir() a short name or junction
+    // alias; retaining it here made the fake image miss the canonical index.
+    PathBuf::from(crate::multicli::path::canonical_text(
+        &std::fs::canonicalize(&path).unwrap(),
+    ))
 }
 
 #[derive(Default)]

@@ -2531,7 +2531,7 @@ fn schema_v3_extends_installation_identity_and_keeps_every_reference() {
 
     // A normal reopen completes v2 -> v3 without losing a single reference.
     let service = open(&root);
-    assert_eq!(service.schema_version(), 3);
+    assert_eq!(service.schema_version(), SCHEMA_VERSION);
     {
         let conn = service.lock_for_test();
         let (identity, kind, profile): (String, String, String) = conn

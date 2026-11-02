@@ -311,3 +311,190 @@ export interface DiscoverySettings {
 }
 
 export const MAX_PAGE_LIMIT = 200;
+
+// ---------------------------------------------------------------------------
+// S03 history views (`docs/contracts/history-v1.md`). Separate from the frozen
+// S01 DTOs and from the S02 discovery views.
+// ---------------------------------------------------------------------------
+
+export type HistoryIndexStatus =
+  | "idle"
+  | "indexing"
+  | "ok"
+  | "partial"
+  | "error"
+  | "cancelled";
+
+export interface HistoryStatusView {
+  generation: number;
+  status: HistoryIndexStatus;
+  inFlight: boolean;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  error: AppError | null;
+  filesTotal: number;
+  filesDone: number;
+  filesSkipped: number;
+  filesFailed: number;
+  messagesIndexed: number;
+  bytesRead: number;
+  complete: boolean;
+  progressPermille: number;
+  note: string;
+}
+
+export interface HistorySourceView {
+  sourceId: string;
+  hostId: string;
+  agentId: string;
+  product: string;
+  installationId: string | null;
+  configProfileId: string;
+  configProfileStatus: "confirmed" | "unconfirmed";
+  root: HostPath;
+  enabled: boolean;
+  parserVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  status: HistoryStatusView;
+}
+
+export interface HistorySourceStatus {
+  sourceId: string;
+  agentId: string;
+  product: string;
+  enabled: boolean;
+  status: HistoryStatusView;
+}
+
+export interface HistoryOverallStatus {
+  schemaVersion: number;
+  scope: string;
+  inFlight: boolean;
+  sources: HistorySourceStatus[];
+  note: string;
+}
+
+export interface HistoryCandidateView {
+  agentId: string;
+  product: string;
+  displayName: string;
+  root: HostPath;
+  exists: boolean;
+  readable: boolean;
+  entrySample: number;
+  suggestion: string;
+  alreadyConfigured: boolean;
+  note: string;
+}
+
+export interface HistorySourceUpdateInput {
+  sourceId?: string | null;
+  product: string;
+  installationId?: string | null;
+  configProfileId: string;
+  root: string;
+  enabled: boolean;
+}
+
+export interface SessionWorkspaceDetail {
+  workspaceId: string;
+  role: "primary" | "related";
+  evidence: string;
+  path: HostPath | null;
+}
+
+export interface MessageKindCount {
+  kind: string;
+  count: number;
+}
+
+export interface HistoryProvenanceView {
+  sourceIds: string[];
+  fileCount: number;
+  parserVersions: number[];
+  readOnly: boolean;
+}
+
+export interface SessionMetadataView {
+  session: Session;
+  workspaces: SessionWorkspaceDetail[];
+  runs: Run[];
+  runTotal: number;
+  messageCount: number;
+  messageKinds: MessageKindCount[];
+  firstMessageAt: string | null;
+  lastMessageAt: string | null;
+  history: HistoryProvenanceView | null;
+  note: string;
+}
+
+export interface MessagePage {
+  items: Message[];
+  nextCursor: string | null;
+  total: number;
+  anchorMessageId: string | null;
+  anchorIndex: number | null;
+}
+
+export interface MessagePageQuery {
+  sessionId: string;
+  limit: number;
+  cursor?: string | null;
+  anchorMessageId?: string | null;
+}
+
+export interface SearchHitView {
+  sessionId: string;
+  messageId: string;
+  sessionTitle: string;
+  agentId: string;
+  kind: string;
+  seq: number;
+  observedAt: string;
+  snippet: string;
+  snippetTruncated: boolean;
+  matchMode: "fts" | "like";
+  sourceIds: string[];
+  sessionMessageCount: number;
+}
+
+export interface SearchPage {
+  items: SearchHitView[];
+  nextCursor: string | null;
+  total: number;
+  matchMode: "fts" | "like";
+  note: string;
+}
+
+export interface HistorySearchQuery {
+  text: string;
+  workspaceId?: string | null;
+  agentId?: string | null;
+  sourceId?: string | null;
+  limit: number;
+  cursor?: string | null;
+}
+
+export interface ResumeConflictView {
+  kind: string;
+  detail: string;
+}
+
+export interface ResumeTargetView {
+  sessionId: string;
+  agentId: string;
+  product: string | null;
+  nativeId: string | null;
+  sourceNamespace: string;
+  configProfileId: string | null;
+  status: "resolved" | "blocked" | "unknown" | "unsupported";
+  reason: string;
+  installationId: string | null;
+  executable: HostPath | null;
+  workspaces: HostPath[];
+  conflicts: ResumeConflictView[];
+  evidence: string[];
+  executionAvailable: boolean;
+  note: string;
+}

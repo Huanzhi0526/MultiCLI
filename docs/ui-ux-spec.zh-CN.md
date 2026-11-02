@@ -27,6 +27,32 @@
 
 设置只改本 profile 自有目录的扫描间隔（1–60 秒），不写任何 CLI 配置、注册表或系统代理。窗口真正退出时结束自有采样线程，不影响外部 CLI。
 
+## MultiCLI S03 派生说明
+
+顶部页签改为 **会话 / 历史 / 安装 / 外部进程**。历史页（`src/multicli/history/HistoryView.tsx`）是三栏只读索引：
+
+**左栏：来源**（`SourcesPanel.tsx`）。每个来源显示产品、启用状态、索引状态徽标（idle / indexing / ok / partial / error / cancelled）、代次、文件计数（完成 / 总数 / 跳过 / 失败 / 未读完）、已索引消息数、最近尝试与最近成功时间、进度条、`configProfileId` 与「配置 profile 未确认」徽标，以及真实 `AppError` 与重试。没有正文、没有路径泄露到错误里。失败或部分失败时额外标「索引已过期」，不显示为「成功 0 条」。
+
+`complete=false` 有三类原因，界面必须区分而不是统一说“已完成”：停在预算上（“本 pass 未走完”，下次继续）、有文件被拒绝（错误码 + 失败文件数）、有记录被隔离（`lineErrors` 与第一条的位置/原因，只有行号，没有正文）。`ok` 但仍有待复核文件时显示“完整性复核继续中”，不冒充全部校验完毕。操作：启用/停用、刷新、重建（**两段式确认**，确认按钮才真正清派生索引）、添加来源（候选下拉 + 手动绝对路径 + profile）。加入来源是本页唯一的写操作，且只写 MultiCLI 自有配置。
+
+**中栏：搜索与浏览**（`SearchPanel.tsx`）。输入 300 ms 防抖；`≥3` 字符走 FTS5 trigram，`1–2` 字符走转义 LIKE 回退，界面用徽标显示本次 `matchMode` 并常驻固定说明。空输入显示「仅历史会话」浏览列表（`origin = history-only`）。命中行显示会话标题、Agent、kind、时间、同会话消息数与片段；片段是纯文本（不渲染 HTML），被截断时明写。搜索分别呈现：空输入提示、加载中、无结果、真实 `AppError` 与重试、「加载更多」失败保留已加载行并就地重试。筛选（Agent / 来源 / 工作区）变化重置游标。
+
+**右栏：会话详情**（`SessionPanel.tsx`）。顶部是 `multicli_get_session_metadata` 的会话摘要（标题、history-only、Agent、原生 id、消息数、Run 数、首末时间、来源证据、消息类型计数、工作区与关联证据），**不内嵌消息**。消息由 `multicli_list_session_messages` 每页 50 条读取；点击搜索命中时带 `anchorMessageId`，命中的那条高亮并带「已定位到搜索命中」徽标，加载更多沿用同一游标。长消息折叠展开，工具输入放在独立折叠区，未知字段只列字段名。页脚没有「打开原文 / 执行命令」入口。
+
+**三个入口同一套有界详情**：工作区、Agent 与搜索打开的同一个会话，走同一条
+`get_session_metadata` + `list_session_messages` 链路（`src/multicli/SessionBrowser.tsx` 的
+`useSessionDetail`），不再调用返回全部消息的 `multicli_get_session`。右侧详情显示
+「历史会话 · 分页」徽标与「已加载 x/y 条」，`y` 取元数据里的 `messageCount`；还有下一页时
+给「加载更多消息」，失败就地重试且保留已加载行。切换会话时旧请求的晚到响应被丢弃，
+不会把上一个会话的消息画到新会话里。
+
+游标会绑定关键字、过滤条件、会话与派生数据代次；条件变化或重建后旧游标返回
+`invalid_argument`，界面显示真实错误并允许重查第一页，不静默返回短页。
+
+**继续目标**只解析：按钮调用 `multicli_resolve_resume_target`，显示 resolved / blocked / unknown / unsupported 徽标、原因、冲突与证据；「继续」按钮**始终禁用**并注明 S05 才实现，不能用打开历史冒充恢复成功。
+
+固定文案：历史内容不可信，按纯文本渲染；搜索不依赖英文命中证明中文可用；索引受深度/文件数/字节/时间预算限制，预算用完时 `complete=false`，下次 pass 继续。
+
 > **版本**：v0.1（首版，随实现增量维护）
 > **适用范围**：`src/styles`、`src/components`、`src/features` 中所有用户可见的界面与交互
 > **关联代码**：`src/styles/theme.css`（设计 token）、`src/styles/typography.css`（文本样式）、`src/components/base/*`（基础组件）、`src/i18n/{zh,en}.ts`（文案）
@@ -343,6 +369,12 @@ const feedback = useRunningFeedback(store.loading);
 | MultiCLI 安装列表刷新 | `src/multicli/discovery/InstallationsView.tsx` | 文字按钮 disabled + 面板自身加载态 | 扫描完成后按新代次重读第一页；失败保留旧行并在面板内显示真实 `AppError` 与重试 |
 | MultiCLI 外部进程自动重读 | `src/multicli/discovery/ProcessesView.tsx` | 无按钮（状态驱动） | 无后续页时按扫描间隔重读第一页；已加载后续页时暂停，避免游标跨代次 |
 | MultiCLI 会话列表刷新 | `src/multicli/components.tsx`（`SessionList`）、`src/multicli/App.tsx` | 文字按钮 disabled + 列表面板自身加载态（不进 §4.1 图标反馈） | 重读当前筛选第一页，并重读已选会话详情与能力；失败保留旧列表并在面板内显示真实 `AppError` 与重试。筛选变化是重置游标的一次重新读取，不走此按钮 |
+| MultiCLI 历史来源刷新 | `src/multicli/history/SourcesPanel.tsx` | 文字按钮 disabled + 来源行状态徽标 | 调用 `multicli_refresh_history`；后端合并在途 pass，不同步无限等待。失败保留旧行与旧计数，行内显示真实 `AppError` 与重试；不把失败显示成“成功 0 条” |
+| MultiCLI 历史重建 | `src/multicli/history/SourcesPanel.tsx` | 两段式确认后按钮 disabled + 状态徽标 | 只清该来源派生索引；确认文案写明保留会话 id、备注与标签。取消不调用后端 |
+| MultiCLI 历史状态轮询 | `src/multicli/history/useHistory.ts` | 无按钮（状态驱动，1.5 s） | 只读 `multicli_get_history_status`；代次变化时才重读来源配置行，避免每次轮询都请求列表。轮询失败不覆盖已有状态，只显示错误 |
+| MultiCLI 历史搜索重试 | `src/multicli/history/SearchPanel.tsx` | 错误面板重试按钮 | 同一查询重发第一页；失败保留上次结果并为空时不伪造结果 |
+| MultiCLI 历史浏览刷新 | `src/multicli/history/SearchPanel.tsx` | 文字按钮 + 面板加载态 | 重读 `origin=history-only` 第一页；加载更多失败保留已加载行 |
+| MultiCLI 历史消息加载更多 | `src/multicli/history/SessionPanel.tsx` | 按钮 + 底部加载态 | 同一会话游标续读；失败保留已加载消息并就地重试，不重建会话 |
 | 文件树刷新 | `src/features/files/FileTreeRow.tsx` | `useRunningFeedback(filesStore.refreshing)` | 入口在工作区根行（合成根节点），随该行悬停出现（同该行「添加到聊天」加号）；刷新可能由别处触发，故走状态驱动 |
 | 插件市场索引 | `src/features/plugins/hub/PluginMarketView.tsx` | `useActionFeedback` | 图标按钮位于筛选工具条（分类 chips + 排序 + 搜索）右侧；`isFailure` 读 `marketplaceStore.error`。一次刷新同时重读索引与 `featured.json`（精选是软依赖：拉不到只清空轮播，不写 `error`） |
 | 插件重新加载 | `src/features/plugins/hub/PluginInstalledRow.tsx` | `useActionFeedback` | 成功后该行转为健康态、按钮消失 |

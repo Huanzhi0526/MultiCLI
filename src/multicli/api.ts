@@ -10,14 +10,24 @@ import type {
   CapabilityQuery,
   DiagnosticsExport,
   DiscoverySettings,
+  HistoryCandidateView,
+  HistoryOverallStatus,
+  HistorySearchQuery,
+  HistorySourceUpdateInput,
+  HistorySourceView,
   InstallationDiscoveryView,
   InstallationQuery,
+  MessagePage,
+  MessagePageQuery,
   Page,
   PageQuery,
   ProcessDiscoveryPage,
   ProcessQuery,
+  ResumeTargetView,
   ScanView,
+  SearchPage,
   SessionDetail,
+  SessionMetadataView,
   SessionQuery,
   SessionSummary,
   WorkspaceListItem,
@@ -36,6 +46,16 @@ export interface MultiCliApi {
   listProcesses(query: ProcessQuery): Promise<ProcessDiscoveryPage>;
   refreshDiscovery(): Promise<ScanView>;
   updateDiscoverySettings(intervalMs: number): Promise<DiscoverySettings>;
+  listHistorySources(query: PageQuery): Promise<Page<HistorySourceView>>;
+  listHistoryCandidates(): Promise<HistoryCandidateView[]>;
+  updateHistorySource(input: HistorySourceUpdateInput): Promise<HistorySourceView>;
+  refreshHistory(sourceId?: string | null): Promise<HistoryOverallStatus>;
+  getHistoryStatus(): Promise<HistoryOverallStatus>;
+  rebuildHistoryIndex(sourceId: string): Promise<HistoryOverallStatus>;
+  getSessionMetadata(sessionId: string): Promise<SessionMetadataView>;
+  listSessionMessages(query: MessagePageQuery): Promise<MessagePage>;
+  searchHistory(query: HistorySearchQuery): Promise<SearchPage>;
+  resolveResumeTarget(sessionId: string): Promise<ResumeTargetView>;
 }
 
 function pageArgs(query: PageQuery): Record<string, unknown> {
@@ -103,6 +123,59 @@ export function createMultiCliApi(invokeFn: InvokeFn): MultiCliApi {
       invokeFn<DiscoverySettings>("multicli_update_discovery_settings", {
         query: { intervalMs },
       }),
+    listHistorySources: (query) =>
+      invokeFn<Page<HistorySourceView>>("multicli_list_history_sources", {
+        query: pageArgs(query),
+      }),
+    listHistoryCandidates: () =>
+      invokeFn<HistoryCandidateView[]>("multicli_list_history_candidates"),
+    updateHistorySource: (input) =>
+      invokeFn<HistorySourceView>("multicli_update_history_source", {
+        query: {
+          ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+          product: input.product,
+          ...(input.installationId ? { installationId: input.installationId } : {}),
+          configProfileId: input.configProfileId,
+          root: input.root,
+          enabled: input.enabled,
+        },
+      }),
+    refreshHistory: (sourceId) =>
+      invokeFn<HistoryOverallStatus>("multicli_refresh_history", {
+        query: sourceId ? { sourceId } : {},
+      }),
+    getHistoryStatus: () =>
+      invokeFn<HistoryOverallStatus>("multicli_get_history_status"),
+    rebuildHistoryIndex: (sourceId) =>
+      invokeFn<HistoryOverallStatus>("multicli_rebuild_history_index", {
+        query: { sourceId },
+      }),
+    getSessionMetadata: (sessionId) =>
+      invokeFn<SessionMetadataView>("multicli_get_session_metadata", { sessionId }),
+    listSessionMessages: (query) =>
+      invokeFn<MessagePage>("multicli_list_session_messages", {
+        query: {
+          sessionId: query.sessionId,
+          limit: query.limit,
+          ...(query.cursor ? { cursor: query.cursor } : {}),
+          ...(query.anchorMessageId
+            ? { anchorMessageId: query.anchorMessageId }
+            : {}),
+        },
+      }),
+    searchHistory: (query) =>
+      invokeFn<SearchPage>("multicli_search_history", {
+        query: {
+          text: query.text,
+          ...(query.workspaceId ? { workspaceId: query.workspaceId } : {}),
+          ...(query.agentId ? { agentId: query.agentId } : {}),
+          ...(query.sourceId ? { sourceId: query.sourceId } : {}),
+          limit: query.limit,
+          ...(query.cursor ? { cursor: query.cursor } : {}),
+        },
+      }),
+    resolveResumeTarget: (sessionId) =>
+      invokeFn<ResumeTargetView>("multicli_resolve_resume_target", { sessionId }),
   };
 }
 

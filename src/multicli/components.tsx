@@ -6,12 +6,11 @@ import {
   messageText,
   summarizeCapabilities,
 } from "./navigation";
-import type { PagedResource, DetailResource } from "./usePagedResource";
+import type { PagedResource, SessionDetailResource } from "./usePagedResource";
 import type {
   AgentListItem,
   AppError,
   Capability,
-  SessionDetail,
   SessionOrigin,
   SessionSummary,
   WorkspaceListItem,
@@ -588,10 +587,12 @@ export function SessionDetailView({
   detail,
   capabilities,
   onRetry,
+  onLoadMore,
 }: {
-  detail: DetailResource<SessionDetail>;
+  detail: SessionDetailResource;
   capabilities: PagedResource<Capability>;
   onRetry: () => void;
+  onLoadMore: () => void;
 }) {
   const { t } = useTranslation("multicli");
   if (detail.status === "idle") {
@@ -649,6 +650,11 @@ export function SessionDetailView({
             {session.title || t("untitledSession")}
           </h2>
           <Badge tone={originTone(session.origin)}>{t(`origin.${session.origin}`)}</Badge>
+          {data.history ? (
+            <Badge tone="amber" testId="detail-history-badge">
+              {t("detailHistoryPaged")}
+            </Badge>
+          ) : null}
         </div>
         <p className="mt-1 text-[11px] text-text-tertiary">
           <code data-testid="detail-session-id">{session.id}</code> ·{" "}
@@ -785,6 +791,35 @@ export function SessionDetailView({
           ))}
         </ol>
         )}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-text-tertiary" data-testid="detail-messages-loaded">
+            {t("detailMessagesLoaded", {
+              loaded: data.messages.length,
+              total: data.messageCount,
+            })}
+          </span>
+          {detail.hasMore ? (
+            <button
+              type="button"
+              className="rounded-md border border-separator-border px-3 py-1 text-xs"
+              onClick={onLoadMore}
+              disabled={detail.loadingMore}
+              data-testid="detail-load-more"
+            >
+              {detail.loadingMore ? t("loading") : t("loadMoreMessages")}
+            </button>
+          ) : null}
+        </div>
+        {detail.moreError ? (
+          <div className="mt-2">
+            <ErrorPanel
+              error={detail.moreError}
+              onRetry={onLoadMore}
+              scope="detail-more"
+              compact
+            />
+          </div>
+        ) : null}
       </section>
     </article>
   );

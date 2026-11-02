@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod discovery;
 pub mod domain;
 pub mod error;
+pub mod history;
 pub mod path;
 mod repo;
 mod service;

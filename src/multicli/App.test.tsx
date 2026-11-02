@@ -13,14 +13,26 @@ import type {
   CapabilityQuery,
   DiagnosticsExport,
   DiscoverySettings,
+  HistoryCandidateView,
+  HistoryOverallStatus,
+  HistorySearchQuery,
+  HistorySourceUpdateInput,
+  HistorySourceView,
   InstallationDiscoveryView,
   InstallationQuery,
+  Message,
+  MessagePage,
+  MessagePageQuery,
   Page,
   ProcessDiscoveryPage,
   ProcessDiscoveryView,
   ProcessQuery,
+  ResumeTargetView,
   ScanView,
+  SearchHitView,
+  SearchPage,
   SessionDetail,
+  SessionMetadataView,
   SessionQuery,
   SessionSummary,
   WorkspaceListItem,
@@ -240,6 +252,123 @@ const processView = (overrides: Partial<ProcessDiscoveryView> = {}): ProcessDisc
   ...overrides,
 });
 
+
+const historyStatus = (
+  overrides: Partial<HistorySourceView["status"]> = {},
+): HistorySourceView["status"] => ({
+  generation: 1,
+  status: "ok",
+  inFlight: false,
+  lastAttemptAt: "2026-11-02T03:00:00.000Z",
+  lastSuccessAt: "2026-11-02T03:00:00.000Z",
+  error: null,
+  filesTotal: 1,
+  filesDone: 1,
+  filesSkipped: 0,
+  filesFailed: 0,
+  messagesIndexed: 3,
+  bytesRead: 1024,
+  complete: true,
+  progressPermille: 1000,
+  note: "pass complete",
+  ...overrides,
+});
+
+const historySource = (overrides: Partial<HistorySourceView> = {}): HistorySourceView => ({
+  sourceId: "hsrc-1",
+  hostId: "local-windows",
+  agentId: "codex",
+  product: "codex",
+  installationId: null,
+  configProfileId: "unconfirmed-local",
+  configProfileStatus: "unconfirmed",
+  root: {
+    hostId: "local-windows",
+    displayPath: "C:\\Users\\me\\.codex\\sessions",
+    canonicalPath: "C:\\Users\\me\\.codex\\sessions",
+  },
+  enabled: true,
+  parserVersion: 1,
+  createdAt: "2026-11-02T02:00:00.000Z",
+  updatedAt: "2026-11-02T03:00:00.000Z",
+  status: historyStatus(),
+  ...overrides,
+});
+
+const historyMessage = (id: string, seq: number, text: string): Message => ({
+  id,
+  sessionId: "hist-session-1",
+  runId: null,
+  nativeEventId: `native-${id}`,
+  sourceKey: `codex:response:${id}`,
+  seq,
+  kind: seq === 0 ? "user-message" : "assistant-message",
+  content: { role: seq === 0 ? "user" : "assistant", text, blocks: ["text"] },
+  sourceRef: "path:abcdef#L1",
+  observedAt: `2026-11-02T03:00:0${seq}.000Z`,
+});
+
+const historyMetadata = (): SessionMetadataView => ({
+  session: {
+    id: "hist-session-1",
+    agentId: "codex",
+    hostId: "local-windows",
+    sourceNamespace: "history:codex:codex:unconfirmed-local",
+    nativeId: "native-1",
+    origin: "history-only",
+    title: "历史会话标题",
+  },
+  workspaces: [],
+  runs: [],
+  runTotal: 0,
+  messageCount: 3,
+  messageKinds: [{ kind: "user-message", count: 1 }],
+  firstMessageAt: "2026-11-02T03:00:00.000Z",
+  lastMessageAt: "2026-11-02T03:00:02.000Z",
+  history: {
+    sourceIds: ["hsrc-1"],
+    fileCount: 1,
+    parserVersions: [1],
+    readOnly: true,
+  },
+  note: "metadata only",
+});
+
+const searchHit = (overrides: Partial<SearchHitView> = {}): SearchHitView => ({
+  sessionId: "hist-session-1",
+  messageId: "hmsg-1",
+  sessionTitle: "历史会话标题",
+  agentId: "codex",
+  kind: "user-message",
+  seq: 0,
+  observedAt: "2026-11-02T03:00:00.000Z",
+  snippet: "…历史记录里的中文搜索…",
+  snippetTruncated: true,
+  matchMode: "fts",
+  sourceIds: ["hsrc-1"],
+  sessionMessageCount: 3,
+  ...overrides,
+});
+
+const resumeTarget = (overrides: Partial<ResumeTargetView> = {}): ResumeTargetView => ({
+  sessionId: "hist-session-1",
+  agentId: "codex",
+  product: "codex",
+  nativeId: "native-1",
+  sourceNamespace: "history:codex:codex:unconfirmed-local",
+  configProfileId: "unconfirmed-local",
+  status: "resolved",
+  reason: "a native id and a product are known",
+  installationId: "install-codex",
+  executable: null,
+  workspaces: [],
+  conflicts: [],
+  evidence: [],
+  executionAvailable: false,
+  note: "This command only resolves a target.",
+  ...overrides,
+});
+
 class FakeApi implements MultiCliApi {
   workspaces: Page<WorkspaceListItem> = page([]);
   agents: Page<AgentListItem> = page([]);
@@ -274,6 +403,180 @@ class FakeApi implements MultiCliApi {
   settingsFailure: unknown = null;
   installationCalls: InstallationQuery[] = [];
   processCalls: ProcessQuery[] = [];
+  historySources: Page<HistorySourceView> = page([]);
+  historyCandidates: HistoryCandidateView[] = [];
+  historyStatusValue: HistoryOverallStatus = {
+    schemaVersion: 1,
+    scope: "local-windows",
+    inFlight: false,
+    sources: [],
+    note: "status note",
+  };
+  historySourcesFailure = 0;
+  historySearchResult: SearchPage = {
+    items: [],
+    nextCursor: null,
+    total: 0,
+    matchMode: "fts",
+    note: "search note",
+  };
+  historySearchFailure = 0;
+  historySearches: HistorySearchQuery[] = [];
+  historyMessages: MessagePage = {
+    items: [historyMessage("hmsg-1", 0, "历史记录里的中文搜索")],
+    nextCursor: null,
+    total: 1,
+    anchorMessageId: null,
+    anchorIndex: null,
+  };
+  historyMetadataValue: SessionMetadataView = historyMetadata();
+  historyMessageCalls: MessagePageQuery[] = [];
+  historyUpdates: HistorySourceUpdateInput[] = [];
+  historyResume: ResumeTargetView = resumeTarget();
+  historyResumeFailure = 0;
+  historyRefreshes: (string | null | undefined)[] = [];
+  historyRebuilds: string[] = [];
+
+  listHistorySources(): Promise<Page<HistorySourceView>> {
+    if (this.historySourcesFailure > 0) {
+      this.historySourcesFailure -= 1;
+      return Promise.reject({
+        code: "database",
+        message: "history source list unavailable",
+        retryable: true,
+        details: { stage: "listHistorySources" },
+      });
+    }
+    return Promise.resolve(this.historySources);
+  }
+
+  listHistoryCandidates(): Promise<HistoryCandidateView[]> {
+    return Promise.resolve(this.historyCandidates);
+  }
+
+  updateHistorySource(input: HistorySourceUpdateInput): Promise<HistorySourceView> {
+    this.historyUpdates.push(input);
+    return Promise.resolve(
+      historySource({
+        sourceId: input.sourceId ?? "hsrc-new",
+        product: input.product,
+        configProfileId: input.configProfileId,
+        enabled: input.enabled,
+      }),
+    );
+  }
+
+  refreshHistory(sourceId?: string | null): Promise<HistoryOverallStatus> {
+    this.historyRefreshes.push(sourceId);
+    return Promise.resolve(this.historyStatusValue);
+  }
+
+  getHistoryStatus(): Promise<HistoryOverallStatus> {
+    return Promise.resolve(this.historyStatusValue);
+  }
+
+  rebuildHistoryIndex(sourceId: string): Promise<HistoryOverallStatus> {
+    this.historyRebuilds.push(sourceId);
+    return Promise.resolve(this.historyStatusValue);
+  }
+
+  /**
+   * A session opened from any entry is read as metadata + a bounded message
+   * page. The fake derives both from the same `details` fixture, so the S01
+   * assertions on id/counts still describe one session, and a session that only
+   * exists as a history fixture still resolves through `historyMetadataValue`.
+   */
+  getSessionMetadata(sessionId?: string): Promise<SessionMetadataView> {
+    if (this.detailFailures > 0) {
+      this.detailFailures -= 1;
+      return Promise.reject({
+        code: "database",
+        message: "detail unavailable",
+        retryable: true,
+        details: { stage: "getSessionMetadata" },
+      });
+    }
+    const known = sessionId ? this.details[sessionId] : undefined;
+    if (known) {
+      return Promise.resolve({
+        session: known.session,
+        workspaces: known.workspaces.map((link) => ({
+          workspaceId: link.workspaceId,
+          role: link.role,
+          evidence: link.evidence,
+          path: null,
+        })),
+        runs: known.runs,
+        runTotal: known.runs.length,
+        messageCount: known.messages.length,
+        messageKinds: [],
+        firstMessageAt: null,
+        lastMessageAt: null,
+        history: null,
+        note: "fixture metadata",
+      });
+    }
+    if (sessionId && sessionId === this.historyMetadataValue.session.id) {
+      return Promise.resolve(this.historyMetadataValue);
+    }
+    return Promise.reject({
+      code: "not_found",
+      message: "session not found",
+      retryable: false,
+      details: { entity: "session", id: sessionId },
+    });
+  }
+
+  listSessionMessages(query: MessagePageQuery): Promise<MessagePage> {
+    this.historyMessageCalls.push(query);
+    const known = this.details[query.sessionId];
+    if (known) {
+      const start = query.cursor ? Number(query.cursor) : 0;
+      const slice = known.messages.slice(start, start + query.limit);
+      const next =
+        start + query.limit < known.messages.length
+          ? String(start + query.limit)
+          : null;
+      return Promise.resolve({
+        items: slice,
+        nextCursor: next,
+        total: known.messages.length,
+        anchorMessageId: query.anchorMessageId ?? null,
+        anchorIndex: null,
+      });
+    }
+    return Promise.resolve({
+      ...this.historyMessages,
+      anchorMessageId: query.anchorMessageId ?? null,
+    });
+  }
+
+  searchHistory(query: HistorySearchQuery): Promise<SearchPage> {
+    this.historySearches.push(query);
+    if (this.historySearchFailure > 0) {
+      this.historySearchFailure -= 1;
+      return Promise.reject({
+        code: "database",
+        message: "search unavailable",
+        retryable: true,
+        details: { stage: "searchHistory" },
+      });
+    }
+    return Promise.resolve(this.historySearchResult);
+  }
+
+  resolveResumeTarget(): Promise<ResumeTargetView> {
+    if (this.historyResumeFailure > 0) {
+      this.historyResumeFailure -= 1;
+      return Promise.reject({
+        code: "database",
+        message: "resume resolution unavailable",
+        retryable: true,
+        details: { stage: "resolveResumeTarget" },
+      });
+    }
+    return Promise.resolve(this.historyResume);
+  }
 
   listWorkspaces(): Promise<Page<WorkspaceListItem>> {
     if (this.workspaceFailures > 0) {
@@ -938,5 +1241,451 @@ describe("S02 discovery views", () => {
     await click(byTestId(rendered.container, "session-row-s-1"));
     expect(byTestId(rendered.container, "detail-session-id")?.textContent).toBe("s-1");
     expect(byTestId(rendered.container, "detail-count-messages")?.textContent).toBe("2");
+  });
+});
+
+describe("S03 history index", () => {
+  const historyStatusValue = (overrides: Partial<HistoryOverallStatus> = {}): HistoryOverallStatus => ({
+    schemaVersion: 1,
+    scope: "local-windows",
+    inFlight: false,
+    sources: [
+      {
+        sourceId: "hsrc-1",
+        agentId: "codex",
+        product: "codex",
+        enabled: true,
+        status: historyStatus(),
+      },
+    ],
+    note: "status note",
+    ...overrides,
+  });
+
+  async function typeInto(input: HTMLInputElement, value: string): Promise<void> {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      setter?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    await flush();
+  }
+
+  it("adds a source, searches, opens the same session and only resolves a resume target", async () => {
+    const api = new FakeApi();
+    api.historySources = page([historySource()]);
+    api.historyStatusValue = historyStatusValue();
+    api.historyCandidates = [
+      {
+        agentId: "codex",
+        product: "codex",
+        displayName: "Codex CLI",
+        root: {
+          hostId: "local-windows",
+          displayPath: "C:\\Users\\me\\.codex\\sessions",
+          canonicalPath: "C:\\Users\\me\\.codex\\sessions",
+        },
+        exists: true,
+        readable: true,
+        entrySample: 3,
+        suggestion: "home-default",
+        alreadyConfigured: false,
+        note: "a candidate directory",
+      },
+    ];
+    api.historySearchResult = {
+      items: [searchHit()],
+      nextCursor: null,
+      total: 1,
+      matchMode: "fts",
+      note: "search note",
+    };
+    api.historyMessages = {
+      items: [
+        historyMessage("hmsg-1", 0, "历史记录里的中文搜索"),
+        historyMessage("hmsg-2", 1, "回答"),
+      ],
+      nextCursor: null,
+      total: 2,
+      anchorMessageId: null,
+      anchorIndex: null,
+    };
+    rendered = await renderApp(api);
+
+    await click(byTestId(rendered.container, "view-history"));
+    expect(byTestId(rendered.container, "history-view")).not.toBeNull();
+    expect(byTestId(rendered.container, "history-source-hsrc-1")).not.toBeNull();
+    // The unconfirmed profile is shown as such, not as "default".
+    expect(rendered.container.textContent).toContain("配置 profile 未确认");
+
+    const input = byTestId<HTMLInputElement>(rendered.container, "history-search-input");
+    expect(input).not.toBeNull();
+    await typeInto(input as HTMLInputElement, "历史记录");
+    expect(api.historySearches.at(-1)?.text).toBe("历史记录");
+    expect(byTestId(rendered.container, "history-hit-hmsg-1")).not.toBeNull();
+
+    await click(byTestId(rendered.container, "history-hit-hmsg-1"));
+    expect(api.historyMessageCalls.at(-1)?.anchorMessageId).toBe("hmsg-1");
+    expect(byTestId(rendered.container, "history-detail-title")?.textContent).toContain(
+      "历史会话标题",
+    );
+    expect(byTestId(rendered.container, "history-anchored")).not.toBeNull();
+    expect(byTestId(rendered.container, "history-message-hmsg-1")?.dataset.anchored).toBe(
+      "true",
+    );
+
+    await click(byTestId(rendered.container, "history-resume-check"));
+    expect(byTestId(rendered.container, "history-resume-status")?.textContent).toBe("可解析");
+    const resumeButton = byTestId<HTMLButtonElement>(
+      rendered.container,
+      "history-resume-disabled",
+    );
+    expect(resumeButton?.disabled).toBe(true);
+
+    // Rebuild asks for confirmation before it clears the derived index.
+    await click(byTestId(rendered.container, "history-rebuild-hsrc-1"));
+    expect(byTestId(rendered.container, "history-rebuild-confirm-hsrc-1")).not.toBeNull();
+    expect(api.historyRebuilds).toEqual([]);
+    await click(byTestId(rendered.container, "history-rebuild-confirm-hsrc-1"));
+    expect(api.historyRebuilds).toEqual(["hsrc-1"]);
+  });
+
+  it("shows a real search error and recovers on retry", async () => {
+    const api = new FakeApi();
+    api.historySources = page([historySource()]);
+    api.historyStatusValue = historyStatusValue();
+    api.historySearchFailure = 1;
+    api.historySearchResult = {
+      items: [searchHit()],
+      nextCursor: null,
+      total: 1,
+      matchMode: "like",
+      note: "search note",
+    };
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-history"));
+    await typeInto(
+      byTestId<HTMLInputElement>(rendered.container, "history-search-input") as HTMLInputElement,
+      "中文",
+    );
+    expect(byTestId(rendered.container, "history-search-error-code")?.textContent).toBe(
+      "database",
+    );
+    expect(byTestId(rendered.container, "history-search-empty")).toBeNull();
+    // A failure must not be summarised as "0 results" next to the error panel.
+    expect(byTestId(rendered.container, "history-search-total")).toBeNull();
+    await click(byTestId(rendered.container, "history-search-retry"));
+    expect(byTestId(rendered.container, "history-search-error")).toBeNull();
+    expect(byTestId(rendered.container, "history-hit-hmsg-1")).not.toBeNull();
+    expect(api.historySearches.at(-1)?.text).toBe("中文");
+  });
+
+  it("distinguishes an empty source list from a failed one", async () => {
+    const api = new FakeApi();
+    api.historySourcesFailure = 1;
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-history"));
+    expect(byTestId(rendered.container, "history-sources-error-code")?.textContent).toBe(
+      "database",
+    );
+    expect(byTestId(rendered.container, "history-sources-empty")).toBeNull();
+    await click(byTestId(rendered.container, "history-sources-retry"));
+    expect(byTestId(rendered.container, "history-sources-empty")).not.toBeNull();
+    expect(byTestId(rendered.container, "history-browse-empty")).not.toBeNull();
+    expect(byTestId(rendered.container, "history-detail-empty")).not.toBeNull();
+  });
+
+  it("shows a blocked resume target without offering execution", async () => {
+    const api = new FakeApi();
+    api.historySources = page([historySource()]);
+    api.historyStatusValue = historyStatusValue();
+    api.historyResume = resumeTarget({
+      status: "blocked",
+      reason: "an active run can still write this session",
+      conflicts: [{ kind: "active-run", detail: "run run-1 is running" }],
+    });
+    api.sessions = page([summary("hist-session-1", "codex", "历史会话标题")]);
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-history"));
+    await click(byTestId(rendered.container, "history-session-hist-session-1"));
+    await click(byTestId(rendered.container, "history-resume-check"));
+    expect(byTestId(rendered.container, "history-resume-status")?.textContent).toBe("被阻止");
+    expect(rendered.container.textContent).toContain("active-run");
+    expect(
+      byTestId<HTMLButtonElement>(rendered.container, "history-resume-disabled")?.disabled,
+    ).toBe(true);
+  });
+
+  it("pages messages with a cursor without duplicating or reordering rows", async () => {
+    const api = new FakeApi();
+    api.historySources = page([historySource()]);
+    api.historyStatusValue = historyStatusValue();
+    api.sessions = page([summary("hist-session-1", "codex", "历史会话标题")]);
+    const firstPage: MessagePage = {
+      items: [historyMessage("hmsg-1", 0, "第一条"), historyMessage("hmsg-2", 1, "第二条")],
+      nextCursor: "cursor-1",
+      total: 3,
+      anchorMessageId: null,
+      anchorIndex: null,
+    };
+    const secondPage: MessagePage = {
+      items: [historyMessage("hmsg-3", 2, "第三条")],
+      nextCursor: null,
+      total: 3,
+      anchorMessageId: null,
+      anchorIndex: null,
+    };
+    api.listSessionMessages = (query) => {
+      api.historyMessageCalls.push(query);
+      return Promise.resolve(query.cursor ? secondPage : firstPage);
+    };
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-history"));
+    await click(byTestId(rendered.container, "history-session-hist-session-1"));
+
+    const rowIds = () =>
+      Array.from(
+        rendered!.container.querySelectorAll<HTMLElement>(
+          "[data-testid^='history-message-hmsg-']",
+        ),
+      ).map((row) => row.dataset.testid);
+    expect(api.historyMessageCalls[0]?.limit).toBe(50);
+    expect(api.historyMessageCalls[0]?.cursor).toBeUndefined();
+    expect(rowIds()).toEqual([
+      "history-message-hmsg-1",
+      "history-message-hmsg-2",
+    ]);
+
+    await click(byTestId(rendered.container, "history-messages-load-more"));
+    expect(api.historyMessageCalls.at(-1)?.cursor).toBe("cursor-1");
+    expect(rowIds()).toEqual([
+      "history-message-hmsg-1",
+      "history-message-hmsg-2",
+      "history-message-hmsg-3",
+    ]);
+    expect(byTestId(rendered.container, "history-messages-load-more")).toBeNull();
+  });
+
+  it("shows stale, error and unsupported states distinctly", async () => {
+    const api = new FakeApi();
+    api.historySources = page([
+      historySource({ sourceId: "hsrc-stale", enabled: false }),
+      historySource({
+        sourceId: "hsrc-error",
+        status: historyStatus({
+          status: "error",
+          error: {
+            code: "access_denied",
+            message: "the root cannot be listed",
+            retryable: false,
+            details: { stage: "historyScan" },
+          },
+        }),
+      }),
+    ]);
+    api.historyStatusValue = historyStatusValue({
+      sources: [
+        {
+          sourceId: "hsrc-stale",
+          agentId: "codex",
+          product: "codex",
+          enabled: false,
+          status: historyStatus(),
+        },
+        {
+          sourceId: "hsrc-error",
+          agentId: "codex",
+          product: "codex",
+          enabled: true,
+          status: historyStatus({
+            status: "error",
+            error: {
+              code: "access_denied",
+              message: "the root cannot be listed",
+              retryable: false,
+              details: { stage: "historyScan" },
+            },
+          }),
+        },
+      ],
+    });
+    api.sessions = page([summary("hist-session-1", "codex", "历史会话标题")]);
+    api.historyResume = resumeTarget({
+      status: "unsupported",
+      reason: "the session has no native id",
+      conflicts: [{ kind: "missing-native-id", detail: "nativeId is null" }],
+    });
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-history"));
+
+    const stale = byTestId(rendered.container, "history-source-hsrc-stale");
+    expect(stale?.textContent).toContain("已过期");
+    expect(stale?.textContent).toContain("已停用");
+    const failed = byTestId(rendered.container, "history-source-hsrc-error");
+    expect(failed?.textContent).toContain("失败");
+    expect(failed?.textContent).toContain("access_denied");
+
+    await click(byTestId(rendered.container, "history-session-hist-session-1"));
+    await click(byTestId(rendered.container, "history-resume-check"));
+    expect(byTestId(rendered.container, "history-resume-status")?.textContent).toBe("不支持");
+    expect(
+      byTestId<HTMLButtonElement>(rendered.container, "history-resume-disabled")?.disabled,
+    ).toBe(true);
+  });
+
+  it("sends agent, source and workspace filters with the search query", async () => {
+    async function choose(element: HTMLSelectElement | null, value: string): Promise<void> {
+      if (!element) {
+        throw new Error("select is missing");
+      }
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLSelectElement.prototype,
+        "value",
+      )?.set;
+      await act(async () => {
+        setter?.call(element, value);
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      });
+      await flush();
+    }
+
+    const api = new FakeApi();
+    api.historySources = page([
+      historySource(),
+      historySource({
+        sourceId: "hsrc-2",
+        agentId: "claude",
+        product: "claude-code",
+        root: {
+          hostId: "local-windows",
+          displayPath: "C:\Users\me\.claude\projects",
+          canonicalPath: "C:\Users\me\.claude\projects",
+        },
+      }),
+    ]);
+    api.historyStatusValue = historyStatusValue();
+    api.workspaces = page([workspace("ws-1", "C:\Work\Alpha")]);
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-history"));
+
+    await typeInto(
+      byTestId<HTMLInputElement>(rendered.container, "history-search-input") as HTMLInputElement,
+      "中文",
+    );
+    expect(api.historySearches.at(-1)?.text).toBe("中文");
+
+    await choose(byTestId<HTMLSelectElement>(rendered.container, "history-filter-agent"), "claude");
+    expect(api.historySearches.at(-1)?.agentId).toBe("claude");
+    await choose(byTestId<HTMLSelectElement>(rendered.container, "history-filter-source"), "hsrc-2");
+    expect(api.historySearches.at(-1)?.sourceId).toBe("hsrc-2");
+    await choose(byTestId<HTMLSelectElement>(rendered.container, "history-filter-workspace"), "ws-1");
+    expect(api.historySearches.at(-1)?.workspaceId).toBe("ws-1");
+    expect(api.historySearches.at(-1)?.text).toBe("中文");
+    // Filters live in the query key, so every change is a fresh first page.
+    expect(api.historySearches.at(-1)?.cursor).toBeUndefined();
+  });
+});
+
+describe("S03-R1 bounded session detail", () => {
+  it("reads a session through metadata plus one bounded message page", async () => {
+    const api = new FakeApi();
+    api.workspaces = page([workspace("ws-1", "C:\\Work\\Alpha")]);
+    api.sessions = page([summary("s-big", "a-1", "大历史会话")]);
+    api.details["s-big"] = detail("s-big", "a-1", "大历史会话");
+    const all = api.details["s-big"].messages;
+    const calls: MessagePageQuery[] = [];
+    api.listSessionMessages = (query) => {
+      calls.push(query);
+      return Promise.resolve(
+        query.cursor
+          ? {
+              items: all.slice(1),
+              nextCursor: null,
+              total: all.length,
+              anchorMessageId: null,
+              anchorIndex: null,
+            }
+          : {
+              items: all.slice(0, 1),
+              nextCursor: "page-2",
+              total: all.length,
+              anchorMessageId: null,
+              anchorIndex: null,
+            },
+      );
+    };
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await click(byTestId(rendered.container, "session-row-s-big"));
+
+    // The detail no longer calls getSession (unbounded); it asks for metadata
+    // and a bounded page instead.
+    expect(calls.at(-1)?.sessionId).toBe("s-big");
+    expect(calls.at(-1)?.limit).toBe(100);
+    expect(byTestId(rendered.container, "detail-count-messages")?.textContent).toBe(
+      String(all.length),
+    );
+    expect(
+      byTestId(rendered.container, "detail-messages-loaded")?.textContent,
+    ).toContain(`1/${all.length}`);
+
+    await click(byTestId(rendered.container, "detail-load-more"));
+    expect(
+      byTestId(rendered.container, "detail-messages-loaded")?.textContent,
+    ).toContain(`${all.length}/${all.length}`);
+    expect(byTestId(rendered.container, "detail-load-more")).toBeNull();
+  });
+
+  it("drops a late detail page from a previously selected session", async () => {
+    const api = new FakeApi();
+    api.workspaces = page([workspace("ws-1", "C:\\Work\\Alpha")]);
+    api.sessions = page([
+      summary("s-a", "a-1", "会话 A"),
+      summary("s-b", "a-1", "会话 B"),
+    ]);
+    api.details["s-a"] = detail("s-a", "a-1", "会话 A");
+    api.details["s-b"] = detail("s-b", "a-1", "会话 B");
+    let releaseA: ((page: MessagePage) => void) | null = null;
+    api.listSessionMessages = (query) => {
+      if (query.sessionId === "s-a") {
+        return new Promise<MessagePage>((resolve) => {
+          releaseA = resolve;
+        });
+      }
+      return Promise.resolve({
+        items: api.details["s-b"].messages,
+        nextCursor: null,
+        total: 2,
+        anchorMessageId: null,
+        anchorIndex: null,
+      });
+    };
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await click(byTestId(rendered.container, "session-row-s-a"));
+    await click(byTestId(rendered.container, "session-row-s-b"));
+    expect(byTestId(rendered.container, "detail-session-id")?.textContent).toBe("s-b");
+
+    await act(async () => {
+      releaseA?.({
+        items: api.details["s-a"].messages,
+        nextCursor: null,
+        total: 2,
+        anchorMessageId: null,
+        anchorIndex: null,
+      });
+    });
+    // The stale answer belongs to s-a and must not replace s-b's detail.
+    expect(byTestId(rendered.container, "detail-session-id")?.textContent).toBe("s-b");
+    expect(byTestId(rendered.container, "message-row-m-1")).not.toBeNull();
   });
 });

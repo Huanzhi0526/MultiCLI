@@ -13,9 +13,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["unstable", "macos-private-api"] }
+tauri = { version = "2", features = ["unstable", "macos-private-api", "tray-icon"] }
 # macos-private-api: WebviewWindowBuilder::transparent on macOS (cursor
 # overlay window, src/cu_overlay.rs) is gated behind it.
+# tray-icon (S04): the managed terminal keeps running in the background, so
+# closing the main window hides it to a tray icon instead of ending the app.
+# The feature only turns on the optional `tray-icon`/`muda` crates that are
+# already present in Cargo.lock — no dependency version changes.
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"

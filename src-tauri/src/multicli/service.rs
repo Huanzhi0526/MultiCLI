@@ -8,10 +8,10 @@ use super::diagnostics::{
     DiagnosticsExport,
 };
 use super::domain::{
-    AgentDefinition, AgentInstallation, AgentListItem, Capability, CapabilityQuery, Host, Message,
-    Page, PageRequest, ProcessIdentity, ProcessObservation, Run, RunProcessLink, Session,
-    SessionDetail, SessionQuery, SessionRelation, SessionSummary, SessionWorkspace, Workspace,
-    WorkspaceListItem,
+    AgentDefinition, AgentInstallation, AgentListItem, Capability, CapabilityQuery, ExecutionStatus,
+    Host, Message, Page, PageRequest, ProcessIdentity, ProcessObservation, Run, RunProcessLink,
+    Session, SessionDetail, SessionQuery, SessionRelation, SessionSummary, SessionWorkspace,
+    Workspace, WorkspaceListItem,
 };
 use super::error::AppError;
 use super::path::{self, ResolvedWorkspacePath};
@@ -235,10 +235,73 @@ impl MultiCliService {
         repo::observe_process(&conn, observation)
     }
 
+    /// S04: advances a Run's execution status. `ended_at` is mandatory for a
+    /// terminal status, so a Run can never claim to be finished without a
+    /// timestamp and never silently stay `running` after the process is gone.
+    pub fn finish_run(
+        &self,
+        run_id: &str,
+        status: ExecutionStatus,
+        ended_at: Option<&str>,
+        evidence: Option<&str>,
+    ) -> Result<(), AppError> {
+        if run_id.trim().is_empty() {
+            return Err(AppError::invalid_argument("runId", "must not be empty"));
+        }
+        if status.is_terminal() && ended_at.is_none() {
+            return Err(AppError::invalid_argument(
+                "endedAt",
+                "is required for a terminal run status",
+            ));
+        }
+        let conn = self.store.connection().lock();
+        repo::set_run_state(&conn, run_id, status, ended_at, evidence)
+    }
+
     pub fn link_process(&self, link: &RunProcessLink) -> Result<RunProcessLink, AppError> {
         link.validate()?;
         let mut conn = self.store.connection().lock();
         repo::link_run_process(&mut conn, link)
+    }
+
+    /// Every installation recorded for this host. S04 uses it only to offer a
+    /// target picker; it never registers anything and never probes a CLI.
+    pub fn list_all_installations(
+        &self,
+        host_id: &str,
+    ) -> Result<Vec<AgentInstallation>, AppError> {
+        if host_id.trim().is_empty() {
+            return Err(AppError::invalid_argument("hostId", "must not be empty"));
+        }
+        let conn = self.store.connection().lock();
+        repo::all_installations(&conn, host_id)
+    }
+
+    /// Display names for the target picker. Missing rows are simply absent; the
+    /// picker shows the agent id in that case instead of inventing a product.
+    pub fn agents_by_id(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, AgentDefinition>, AppError> {
+        let conn = self.store.connection().lock();
+        repo::all_agents(&conn)
+    }
+
+    pub fn get_installation(
+        &self,
+        host_id: &str,
+        installation_id: &str,
+    ) -> Result<Option<AgentInstallation>, AppError> {
+        if host_id.trim().is_empty() {
+            return Err(AppError::invalid_argument("hostId", "must not be empty"));
+        }
+        if installation_id.trim().is_empty() {
+            return Err(AppError::invalid_argument(
+                "installationId",
+                "must not be empty",
+            ));
+        }
+        let conn = self.store.connection().lock();
+        repo::installation_by_id(&conn, host_id, installation_id)
     }
 
     pub fn record_message(&self, message: &Message) -> Result<Message, AppError> {

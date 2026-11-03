@@ -498,3 +498,210 @@ export interface ResumeTargetView {
   executionAvailable: boolean;
   note: string;
 }
+
+// ---------------------------------------------------------------------------
+// S04 managed terminal views (`docs/contracts/terminal-v1.md`). Additive to the
+// frozen S01 domain: a terminal Run is still the frozen `Run` record, and these
+// are the extra terminal-specific fields the UI renders.
+// ---------------------------------------------------------------------------
+
+export type ShellFlavor = "cmd" | "windows-powershell" | "pwsh";
+export type TerminalTargetKind = "shell" | "installation";
+export type TerminalLaunchChain = "exe" | "cmd" | "powershell";
+export type TerminalRunState = "starting" | "running" | "stopping" | "exited" | "failed";
+export type TerminalStopMode = "interrupt" | "gentle" | "force";
+export type TerminalJobMode = "kill-on-close" | "unassigned";
+
+export interface TerminalTarget {
+  kind: TerminalTargetKind;
+  shell?: ShellFlavor | null;
+  installationId?: string | null;
+}
+
+export interface TerminalEnvVar {
+  name: string;
+  value: string;
+}
+
+export interface TerminalOpenSpec {
+  target: TerminalTarget;
+  args: string[];
+  cwd: string;
+  env: TerminalEnvVar[];
+  cols: number;
+  rows: number;
+  title?: string | null;
+}
+
+export interface TerminalJobGuardView {
+  mode: TerminalJobMode;
+  assigned: boolean;
+  reason: string | null;
+}
+
+export interface TerminalBuffersView {
+  bufferCapacityBytes: number;
+  bufferedBytes: number;
+  droppedBytes: number;
+  logPath: string;
+  logCapacityBytes: number;
+  logBytes: number;
+  logRotations: number;
+  logDroppedBytes: number;
+}
+
+export interface TerminalExitView {
+  code: number | null;
+  success: boolean;
+  endedAt: string;
+  reported: boolean;
+  signal: string | null;
+}
+
+export interface TerminalStopReport {
+  requested: TerminalStopMode;
+  interruptSent: boolean;
+  escalated: boolean;
+  waitedMs: number;
+  alreadyTerminal: boolean;
+  refusedReason: string | null;
+}
+
+export interface TerminalView {
+  schemaVersion: number;
+  terminalId: string;
+  runId: string;
+  sessionId: string;
+  agentId: string;
+  installationId: string | null;
+  title: string;
+  targetKind: TerminalTargetKind;
+  product: string | null;
+  executable: HostPath;
+  launchChain: TerminalLaunchChain;
+  launchArgv: string[];
+  args: string[];
+  cwd: HostPath;
+  envNames: string[];
+  state: TerminalRunState;
+  interactionStatus: string;
+  identity: ProcessIdentity | null;
+  job: TerminalJobGuardView;
+  buffers: TerminalBuffersView;
+  exit: TerminalExitView | null;
+  stop: TerminalStopReport | null;
+  startedAt: string;
+  endedAt: string | null;
+  evidence: string;
+  notes: string[];
+}
+
+export interface TerminalLimits {
+  bufferBytes: number;
+  minBufferBytes: number;
+  maxBufferBytes: number;
+  logBytes: number;
+  minLogBytes: number;
+  maxLogBytes: number;
+  maxTerminals: number;
+  note: string;
+}
+
+export interface TerminalListView {
+  schemaVersion: number;
+  items: TerminalView[];
+  limits: TerminalLimits;
+  activeCount: number;
+  note: string;
+}
+
+export interface TerminalReadQuery {
+  terminalId: string;
+  cursor?: number | null;
+  maxBytes?: number | null;
+}
+
+export interface TerminalReadView {
+  terminalId: string;
+  runId: string;
+  streamId: string;
+  fromSeq: number;
+  toSeq: number;
+  text: string;
+  bytes: number;
+  droppedBefore: number;
+  droppedBytes: number;
+  historyTruncated: boolean;
+  bufferedBytes: number;
+  state: TerminalRunState;
+  exit: TerminalExitView | null;
+}
+
+export interface TerminalWriteView {
+  terminalId: string;
+  acceptedBytes: number;
+  state: TerminalRunState;
+}
+
+export interface TerminalResizeView {
+  terminalId: string;
+  cols: number;
+  rows: number;
+}
+
+export interface TerminalStopView {
+  terminal: TerminalView;
+  stop: TerminalStopReport;
+}
+
+export interface TerminalCloseView {
+  terminalId: string;
+  removed: boolean;
+  stop: TerminalStopReport;
+  note: string;
+}
+
+export interface TerminalShutdownAllView {
+  stopped: TerminalCloseView[];
+  remaining: number;
+  note: string;
+}
+
+export interface TerminalQuitCheckView {
+  activeCount: number;
+  needsConfirmation: boolean;
+  note: string;
+}
+
+export interface TerminalTargetView {
+  id: string;
+  kind: TerminalTargetKind;
+  label: string;
+  agentId: string | null;
+  product: string | null;
+  installationId: string | null;
+  executable: HostPath | null;
+  launchChain: TerminalLaunchChain | null;
+  status: "ready" | "missing" | "unsupported" | "unverified";
+  reason: string | null;
+  version: string | null;
+}
+
+export interface TerminalTargetsView {
+  schemaVersion: number;
+  items: TerminalTargetView[];
+  limits: TerminalLimits;
+  cwdDefault: string;
+  note: string;
+}
+
+export interface TerminalNotify {
+  kind: "output" | "state";
+  terminalId: string;
+  runId: string;
+  streamId: string;
+  seq: number;
+  state: TerminalRunState;
+  bufferedBytes: number;
+  droppedBytes: number;
+}

@@ -53,6 +53,28 @@
 
 固定文案：历史内容不可信，按纯文本渲染；搜索不依赖英文命中证明中文可用；索引受深度/文件数/字节/时间预算限制，预算用完时 `complete=false`，下次 pass 继续。
 
+## MultiCLI S04 派生说明
+
+顶部页签改为 **会话 / 历史 / 安装 / 外部进程 / 终端**。终端页（`src/multicli/terminal/`）是本阶段唯一新增写入口。
+
+**工具条**（`TerminalWorkspace.tsx`）：「新建终端」只打开本机 shell 或已注册安装；`Ctrl+C（打断）`、`温和停止`、`强制终止`、`关闭标签` 四个动作**分开展示**，不合并成单个“停止”。没有终端时四个按钮全部禁用。右侧常驻上限说明（终端数 / 内存缓冲 / 日志）。
+
+**标签**：每个标签显示状态点与状态徽标（starting / running / stopping / exited / failed）。切换标签不重建 PTY；隐藏的标签继续读取输出，因此切回时滚动内容仍在。关闭一个标签只停止它自己的进程树。
+
+**终端面板**（`TerminalPane.tsx`）：xterm 首次挂载时才动态加载（`xtermLoader.ts`），WebGL 渲染器加载失败或被回收时自动退回默认渲染器。输入串行发送至 `multicli_terminal_write`，输出按 `multicli_terminal_read` 拉取：**上一批被 xterm 解析完成后才请求下一批**，所有唤醒共享至少 32ms 的合批间隔，慢渲染只在后端有界环中落后。隐藏 pane 继续读取/解析；尺寸由读循环检查实际布局盒，变化时 fit 并同步 cols/rows，隐藏零尺寸不提交退化几何。
+
+**复制/粘贴**：`Ctrl+Shift+C` 复制选区（`Ctrl+C` 必须留给终端中断），右键有选区时直接复制，粘贴走浏览器原生 paste（多行保留）。复制失败显示真实提示，不静默。
+
+**输入/日志边界**：输入按到达顺序串行发送，排队加在途最多 1MiB，超限显示本地化错误。日志在当前 profile 内写入，按完整 UTF-8/控制序列边界轮转；轮转/写入失败停止此日志并显示错误，丢弃有计数。当前文件与一个轮转文件各分配一半预算，合计不超过配置值。`.ps1` 启动需 PowerShell 7.3+；缺失或旧版明确报错，不自动安装。
+
+**丢弃提示**：当后端因 4 MiB 上限丢弃历史时，顶部出现可关闭的固定提示「已丢弃 X（累计 Y）」，并注明新输出仍按字节顺序到达；`historyTruncated=false` 时不显示。
+
+**状态栏**（`terminal-status*`）：显示状态、启动链、`runId`、进程身份（pid + 创建时间）、缓冲/丢弃字节、日志路径与轮转/丢弃计数、Job 约束（`kill-on-close` 或未约束原因）、退出码与信号、最近一次停止报告（模式 / 等待 ms / 是否升级）。**没有**把无输出解释成 idle：交互状态恒为 `unknown`。
+
+**新建对话框**：目标下拉只列 `multicli_terminal_targets` 的真实条目，`missing` / `unsupported` 条目禁用并在下方写出原因；工作目录必填绝对路径；参数**每行一个**，按 argv 原样传递（不按空格拆分，空白行忽略，空字符串参数无法表达）；环境变量每行 `KEY=VALUE`，格式错误就地报错且不提交。创建失败显示真实 `AppError`（含 code 与 details），对话框保留以便修正。
+
+**托盘与退出**：关闭主窗口只是隐藏到托盘，托管终端继续在后台排空。托盘「退出 MultiCLI」先发 `multicli://quit-requested`；前端用 `multicli_terminal_quit_check` 判断：没有自有终端直接退出，否则弹出「取消退出 / 停止自有终端并退出」两选一，绝不静默结束进程。外部 CLI 不在枚举范围内。
+
 > **版本**：v0.1（首版，随实现增量维护）
 > **适用范围**：`src/styles`、`src/components`、`src/features` 中所有用户可见的界面与交互
 > **关联代码**：`src/styles/theme.css`（设计 token）、`src/styles/typography.css`（文本样式）、`src/components/base/*`（基础组件）、`src/i18n/{zh,en}.ts`（文案）

@@ -30,6 +30,20 @@ import type {
   SessionMetadataView,
   SessionQuery,
   SessionSummary,
+  TerminalCloseView,
+  TerminalLimits,
+  TerminalListView,
+  TerminalOpenSpec,
+  TerminalQuitCheckView,
+  TerminalReadQuery,
+  TerminalReadView,
+  TerminalResizeView,
+  TerminalShutdownAllView,
+  TerminalStopMode,
+  TerminalStopView,
+  TerminalTargetsView,
+  TerminalView,
+  TerminalWriteView,
   WorkspaceListItem,
 } from "./types";
 
@@ -56,6 +70,27 @@ export interface MultiCliApi {
   listSessionMessages(query: MessagePageQuery): Promise<MessagePage>;
   searchHistory(query: HistorySearchQuery): Promise<SearchPage>;
   resolveResumeTarget(sessionId: string): Promise<ResumeTargetView>;
+  // S04 managed terminal
+  terminalTargets(): Promise<TerminalTargetsView>;
+  terminalOpen(spec: TerminalOpenSpec): Promise<TerminalView>;
+  terminalList(): Promise<TerminalListView>;
+  terminalRead(query: TerminalReadQuery): Promise<TerminalReadView>;
+  terminalWrite(terminalId: string, data: string): Promise<TerminalWriteView>;
+  terminalResize(terminalId: string, cols: number, rows: number): Promise<TerminalResizeView>;
+  terminalStop(
+    terminalId: string,
+    mode: TerminalStopMode,
+    graceMs?: number,
+  ): Promise<TerminalStopView>;
+  terminalClose(
+    terminalId: string,
+    mode?: TerminalStopMode,
+    graceMs?: number,
+  ): Promise<TerminalCloseView>;
+  terminalShutdownAll(): Promise<TerminalShutdownAllView>;
+  terminalLimits(): Promise<TerminalLimits>;
+  terminalQuitCheck(): Promise<TerminalQuitCheckView>;
+  appQuit(): Promise<void>;
 }
 
 function pageArgs(query: PageQuery): Record<string, unknown> {
@@ -176,6 +211,49 @@ export function createMultiCliApi(invokeFn: InvokeFn): MultiCliApi {
       }),
     resolveResumeTarget: (sessionId) =>
       invokeFn<ResumeTargetView>("multicli_resolve_resume_target", { sessionId }),
+    terminalTargets: () => invokeFn<TerminalTargetsView>("multicli_terminal_targets"),
+    terminalOpen: (spec) => invokeFn<TerminalView>("multicli_terminal_open", { spec }),
+    terminalList: () => invokeFn<TerminalListView>("multicli_terminal_list"),
+    terminalRead: (query) =>
+      invokeFn<TerminalReadView>("multicli_terminal_read", {
+        query: {
+          terminalId: query.terminalId,
+          ...(query.cursor === undefined || query.cursor === null
+            ? {}
+            : { cursor: query.cursor }),
+          ...(query.maxBytes ? { maxBytes: query.maxBytes } : {}),
+        },
+      }),
+    terminalWrite: (terminalId, data) =>
+      invokeFn<TerminalWriteView>("multicli_terminal_write", {
+        query: { terminalId, data },
+      }),
+    terminalResize: (terminalId, cols, rows) =>
+      invokeFn<TerminalResizeView>("multicli_terminal_resize", {
+        query: { terminalId, cols, rows },
+      }),
+    terminalStop: (terminalId, mode, graceMs) =>
+      invokeFn<TerminalStopView>("multicli_terminal_stop", {
+        query: {
+          terminalId,
+          mode,
+          ...(graceMs ? { graceMs } : {}),
+        },
+      }),
+    terminalClose: (terminalId, mode, graceMs) =>
+      invokeFn<TerminalCloseView>("multicli_terminal_close", {
+        query: {
+          terminalId,
+          ...(mode ? { mode } : {}),
+          ...(graceMs ? { graceMs } : {}),
+        },
+      }),
+    terminalShutdownAll: () =>
+      invokeFn<TerminalShutdownAllView>("multicli_terminal_shutdown_all"),
+    terminalLimits: () => invokeFn<TerminalLimits>("multicli_terminal_limits"),
+    terminalQuitCheck: () =>
+      invokeFn<TerminalQuitCheckView>("multicli_terminal_quit_check"),
+    appQuit: () => invokeFn<void>("multicli_app_quit", { confirm: true }),
   };
 }
 

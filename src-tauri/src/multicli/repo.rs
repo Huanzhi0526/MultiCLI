@@ -1658,6 +1658,116 @@ pub(crate) fn session_workspaces(
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
+/// Every installation this host knows about, in a stable order. S04 reads it
+/// only to offer verified targets; it never registers a row here.
+pub(crate) fn all_installations(
+    conn: &Connection,
+    host_id: &str,
+) -> Result<Vec<AgentInstallation>, AppError> {
+    let mut statement = conn.prepare(
+        "SELECT id, host_id, agent_id, executable_display_path,
+                executable_canonical_path, version, config_profile_id
+         FROM agent_installations
+         WHERE host_id = ?1
+         ORDER BY agent_id, config_profile_id, id",
+    )?;
+    let rows = statement.query_map([host_id], |row| {
+        Ok(AgentInstallation {
+            id: row.get(0)?,
+            host_id: row.get(1)?,
+            agent_id: row.get(2)?,
+            executable: HostPath {
+                host_id: row.get(1)?,
+                display_path: row.get(3)?,
+                canonical_path: row.get::<_, Option<String>>(4)?,
+            },
+            version: row.get::<_, Option<String>>(5)?,
+            config_profile_id: row.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// One installation by id, used by the terminal target picker at open time.
+pub(crate) fn installation_by_id(
+    conn: &Connection,
+    host_id: &str,
+    id: &str,
+) -> Result<Option<AgentInstallation>, AppError> {
+    Ok(conn
+        .query_row(
+            "SELECT id, host_id, agent_id, executable_display_path,
+                    executable_canonical_path, version, config_profile_id
+             FROM agent_installations WHERE host_id = ?1 AND id = ?2",
+            params![host_id, id],
+            |row| {
+                Ok(AgentInstallation {
+                    id: row.get(0)?,
+                    host_id: row.get(1)?,
+                    agent_id: row.get(2)?,
+                    executable: HostPath {
+                        host_id: row.get(1)?,
+                        display_path: row.get(3)?,
+                        canonical_path: row.get::<_, Option<String>>(4)?,
+                    },
+                    version: row.get::<_, Option<String>>(5)?,
+                    config_profile_id: row.get(6)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+pub(crate) fn all_agents(
+    conn: &Connection,
+) -> Result<std::collections::BTreeMap<String, AgentDefinition>, AppError> {
+    let mut statement = conn.prepare("SELECT id, vendor, display_name FROM agents ORDER BY id")?;
+    let rows = statement.query_map([], |row| {
+        Ok(AgentDefinition {
+            id: row.get(0)?,
+            vendor: row.get(1)?,
+            display_name: row.get(2)?,
+        })
+    })?;
+    let mut map = std::collections::BTreeMap::new();
+    for row in rows {
+        let agent = row?;
+        map.insert(agent.id.clone(), agent);
+    }
+    Ok(map)
+}
+
+/// S04 Run state transition. `ended_at` is written once and never cleared, so a
+/// finished Run keeps its timestamp even if a late event re-states the status.
+///
+/// A terminal status can never be reopened by a non-terminal one: a process
+/// that exits while `open` is still linking it would otherwise end up as
+/// `running` *with* an `ended_at`, which is a Run that lies about a dead process.
+pub(crate) fn set_run_state(
+    conn: &Connection,
+    run_id: &str,
+    status: ExecutionStatus,
+    ended_at: Option<&str>,
+    evidence: Option<&str>,
+) -> Result<(), AppError> {
+    let reopen_guard = if status.is_terminal() { 0 } else { 1 };
+    conn.execute(
+        "UPDATE runs SET execution_status = ?2,
+                ended_at = COALESCE(ended_at, ?3),
+                evidence = COALESCE(?4, evidence)
+         WHERE id = ?1
+           AND (?5 = 0 OR execution_status NOT IN ('exited', 'failed'))",
+        params![run_id, status.as_str(), ended_at, evidence, reopen_guard],
+    )?;
+    let exists: i64 = conn.query_row("SELECT COUNT(*) FROM runs WHERE id = ?1", [run_id], |row| {
+        row.get(0)
+    })?;
+    if exists == 0 {
+        return Err(AppError::not_found("run", run_id));
+    }
+    Ok(())
+}
+
 pub(crate) fn runs_for_session(conn: &Connection, session_id: &str) -> Result<Vec<Run>, AppError> {
     let mut statement = conn.prepare(
         "SELECT id, session_id, installation_id, transport, ownership, started_at, ended_at,

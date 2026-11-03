@@ -35,8 +35,30 @@ import type {
   SessionMetadataView,
   SessionQuery,
   SessionSummary,
+  TerminalCloseView,
+  TerminalLimits,
+  TerminalListView,
+  TerminalQuitCheckView,
+  TerminalReadView,
+  TerminalResizeView,
+  TerminalShutdownAllView,
+  TerminalStopView,
+  TerminalTargetsView,
+  TerminalView,
+  TerminalWriteView,
   WorkspaceListItem,
 } from "./types";
+
+const TERMINAL_LIMITS: TerminalLimits = {
+  bufferBytes: 4 * 1024 * 1024,
+  minBufferBytes: 256 * 1024,
+  maxBufferBytes: 64 * 1024 * 1024,
+  logBytes: 20 * 1024 * 1024,
+  minLogBytes: 1024 * 1024,
+  maxLogBytes: 512 * 1024 * 1024,
+  maxTerminals: 16,
+  note: "synthetic limits",
+};
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -395,6 +417,12 @@ class FakeApi implements MultiCliApi {
   installations: Page<InstallationDiscoveryView> = page([]);
   processes: Page<ProcessDiscoveryView> = page([]);
   scan: ScanView = idleScan();
+  quitCheck: TerminalQuitCheckView = {
+    activeCount: 0,
+    needsConfirmation: false,
+    note: "nothing running",
+  };
+  quitCalls = 0;
   installationFailures = 0;
   processFailures = 0;
   refreshFailure: unknown = null;
@@ -576,6 +604,100 @@ class FakeApi implements MultiCliApi {
       });
     }
     return Promise.resolve(this.historyResume);
+  }
+
+  // S04 terminal surface. The workspace has its own suite; the App-level tests
+  // only need the navigation entry to render and a real "nothing running"
+  // answer for the tray quit check.
+  terminalTargets(): Promise<TerminalTargetsView> {
+    return Promise.resolve({
+      schemaVersion: 1,
+      items: [],
+      limits: TERMINAL_LIMITS,
+      cwdDefault: "C:\\Work",
+      note: "synthetic terminal targets",
+    });
+  }
+
+  terminalOpen(): Promise<TerminalView> {
+    return Promise.reject({
+      code: "unsupported",
+      message: "terminal open is not part of this app-level fake",
+      retryable: false,
+      details: { stage: "terminalOpen" },
+    });
+  }
+
+  terminalList(): Promise<TerminalListView> {
+    return Promise.resolve({
+      schemaVersion: 1,
+      items: [],
+      limits: TERMINAL_LIMITS,
+      activeCount: 0,
+      note: "synthetic terminal list",
+    });
+  }
+
+  terminalRead(): Promise<TerminalReadView> {
+    return Promise.reject({
+      code: "not_found",
+      message: "no terminal in this fake",
+      retryable: false,
+      details: { stage: "terminalRead" },
+    });
+  }
+
+  terminalWrite(): Promise<TerminalWriteView> {
+    return Promise.reject({
+      code: "not_found",
+      message: "no terminal in this fake",
+      retryable: false,
+      details: { stage: "terminalWrite" },
+    });
+  }
+
+  terminalResize(): Promise<TerminalResizeView> {
+    return Promise.reject({
+      code: "not_found",
+      message: "no terminal in this fake",
+      retryable: false,
+      details: { stage: "terminalResize" },
+    });
+  }
+
+  terminalStop(): Promise<TerminalStopView> {
+    return Promise.reject({
+      code: "not_found",
+      message: "no terminal in this fake",
+      retryable: false,
+      details: { stage: "terminalStop" },
+    });
+  }
+
+  terminalClose(): Promise<TerminalCloseView> {
+    return Promise.reject({
+      code: "not_found",
+      message: "no terminal in this fake",
+      retryable: false,
+      details: { stage: "terminalClose" },
+    });
+  }
+
+  terminalShutdownAll(): Promise<TerminalShutdownAllView> {
+    return Promise.resolve({ stopped: [], remaining: 0, note: "nothing owned" });
+  }
+
+  terminalLimits(): Promise<TerminalLimits> {
+    return Promise.resolve(TERMINAL_LIMITS);
+  }
+
+  terminalQuitCheck(): Promise<TerminalQuitCheckView> {
+    return Promise.resolve(this.quitCheck);
+  }
+
+  appQuit(): Promise<void> {
+    this.quitCalls += 1;
+    return Promise.resolve();
   }
 
   listWorkspaces(): Promise<Page<WorkspaceListItem>> {
@@ -1687,5 +1809,79 @@ describe("S03-R1 bounded session detail", () => {
     // The stale answer belongs to s-a and must not replace s-b's detail.
     expect(byTestId(rendered.container, "detail-session-id")?.textContent).toBe("s-b");
     expect(byTestId(rendered.container, "message-row-m-1")).not.toBeNull();
+  });
+});
+
+describe("S04 managed terminal entry", () => {
+  it("renders the terminal workspace and its empty state from the navigation", async () => {
+    const api = new FakeApi();
+    rendered = await renderApp(api);
+    const tab = byTestId(rendered.container, "view-terminal");
+    expect(tab).not.toBeNull();
+    await click(tab);
+    expect(byTestId(rendered.container, "terminal-workspace")).not.toBeNull();
+    expect(byTestId(rendered.container, "terminal-empty")).not.toBeNull();
+    expect(byTestId(rendered.container, "terminal-new")).not.toBeNull();
+    // No terminal is created just by opening the page.
+    expect(byTestId(rendered.container, "terminal-tab-term-1")).toBeNull();
+  });
+
+  it("keeps the stop controls disabled without a terminal", async () => {
+    const api = new FakeApi();
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "view-terminal"));
+    for (const id of [
+      "terminal-stop-interrupt",
+      "terminal-stop-gentle",
+      "terminal-stop-force",
+      "terminal-close",
+    ]) {
+      expect((byTestId(rendered.container, id) as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  it("keeps the terminal workspace mounted while another page is shown", async () => {
+    const api = new FakeApi();
+    rendered = await renderApp(api);
+    const host = byTestId(rendered.container, "terminal-host");
+    expect(host).not.toBeNull();
+    expect(host?.className).toContain("hidden");
+
+    await click(byTestId(rendered.container, "view-terminal"));
+    expect(byTestId(rendered.container, "terminal-host")?.className).not.toContain("hidden");
+    expect(byTestId(rendered.container, "terminal-workspace")).not.toBeNull();
+
+    // Switching away must hide, not unmount: an unmounted workspace would drop
+    // every tab while the PTYs keep running.
+    await click(byTestId(rendered.container, "view-sessions"));
+    const afterSwitch = byTestId(rendered.container, "terminal-host");
+    expect(afterSwitch).not.toBeNull();
+    expect(afterSwitch?.className).toContain("hidden");
+    expect(byTestId(rendered.container, "terminal-workspace")).not.toBeNull();
+    expect(byTestId(rendered.container, "terminal-empty")).not.toBeNull();
+  });
+
+  it("quits directly when no terminal is owned, and asks otherwise", async () => {
+    const api = new FakeApi();
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container, "app-quit"));
+    expect(api.quitCalls).toBe(1);
+    expect(byTestId(rendered.container, "quit-dialog")).toBeNull();
+
+    api.quitCheck = {
+      activeCount: 2,
+      needsConfirmation: true,
+      note: "2 terminals are still running",
+    };
+    await click(byTestId(rendered.container, "app-quit"));
+    expect(byTestId(rendered.container, "quit-dialog")).not.toBeNull();
+    expect(api.quitCalls).toBe(1);
+    await click(byTestId(rendered.container, "quit-cancel"));
+    expect(byTestId(rendered.container, "quit-dialog")).toBeNull();
+    expect(api.quitCalls).toBe(1);
+
+    await click(byTestId(rendered.container, "app-quit"));
+    await click(byTestId(rendered.container, "quit-confirm"));
+    expect(api.quitCalls).toBe(2);
   });
 });

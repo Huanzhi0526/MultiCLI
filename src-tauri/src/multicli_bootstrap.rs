@@ -15,6 +15,14 @@ use crate::multicli::history::{
     HistoryRefreshQuery, HistorySearchQuery, HistorySourceUpdate, HistorySourceView, MessagePage,
     MessagePageQuery, ResumeTargetView, SearchPage, SessionMetadataView,
 };
+use crate::multicli::terminal::{
+    NotifyFn as TerminalNotifyFn, TerminalCloseRequest, TerminalCloseView, TerminalLimits,
+    TerminalLimitsUpdate, TerminalListView, TerminalManager, TerminalNotify, TerminalOpenSpec,
+    TerminalQuitCheckView, TerminalReadRequest, TerminalReadView, TerminalResizeRequest,
+    TerminalResizeView, TerminalShutdownAllRequest, TerminalShutdownAllView, TerminalStopMode,
+    TerminalStopRequest, TerminalStopView, TerminalTargetsView, TerminalWriteRequest,
+    TerminalWriteView,
+};
 use crate::multicli::{
     AgentListItem, AppError, Capability, CapabilityQuery, DiagnosticsExport, ErrorCode, Host,
     MultiCliService, Page, PageRequest, SessionDetail, SessionQuery, SessionSummary,
@@ -28,6 +36,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::State;
+
+/// Frontend notification for a managed terminal. The payload is a few bytes:
+/// the actual output is pulled with `multicli_terminal_read`, so a slow WebView
+/// can never build an unbounded IPC queue.
+const TERMINAL_EVENT: &str = "multicli://terminal";
+/// Asked by the tray when the user picks "退出"; the window decides between
+/// cancelling and stopping this application's own terminals.
+const QUIT_REQUESTED_EVENT: &str = "multicli://quit-requested";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +92,10 @@ pub struct MultiCliRuntime {
     state: Mutex<RuntimeState>,
     discovery: Mutex<Option<Arc<DiscoveryEngine>>>,
     history: Mutex<Option<Arc<HistoryEngine>>>,
+    terminal: Mutex<Option<Arc<TerminalManager>>>,
+    /// Set once in `setup`; the terminal manager emits through it. A missing
+    /// handle is a real error, never a silently dropped notification.
+    app: Mutex<Option<tauri::AppHandle>>,
 }
 
 #[derive(Default)]
@@ -92,7 +112,14 @@ impl MultiCliRuntime {
             state: Mutex::new(RuntimeState::default()),
             discovery: Mutex::new(None),
             history: Mutex::new(None),
+            terminal: Mutex::new(None),
+            app: Mutex::new(None),
         }
+    }
+
+    /// Called once from `setup`, before the first terminal command can run.
+    pub fn attach_app(&self, app: tauri::AppHandle) {
+        *self.app.lock() = Some(app);
     }
 
     pub fn from_environment() -> Self {
@@ -254,13 +281,53 @@ impl MultiCliRuntime {
             engine.stop();
         }
     }
+
+    /// Lazily creates the managed terminal registry. It shares the same
+    /// database and data root, writes logs only under this profile and emits
+    /// one small notification per batch of output.
+    pub fn terminal(&self) -> Result<Arc<TerminalManager>, AppError> {
+        let mut slot = self.terminal.lock();
+        if let Some(manager) = slot.as_ref() {
+            return Ok(manager.clone());
+        }
+        let service = self.service()?;
+        let app = self.app.lock().clone().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::Io,
+                "the application handle is not attached; the terminal cannot report events",
+            )
+            .with_details(serde_json::json!({ "stage": "attachApp" }))
+            .with_retryable(true)
+        })?;
+        let notifier: TerminalNotifyFn = Arc::new(move |payload: TerminalNotify| {
+            use tauri::Emitter;
+            let _ = app.emit(TERMINAL_EVENT, &payload);
+        });
+        let manager = Arc::new(TerminalManager::new(
+            service,
+            self.root.clone(),
+            self.profile.clone(),
+            notifier,
+        )?);
+        *slot = Some(manager.clone());
+        Ok(manager)
+    }
+
+    /// Ends every owned terminal tree. Called from the application exit event
+    /// so a crash-free exit never leaves an orphan family; external processes
+    /// are not enumerated at all.
+    pub fn stop_terminals(&self) {
+        if let Some(manager) = self.terminal.lock().as_ref() {
+            manager.hard_shutdown_all();
+        }
+    }
 }
 
 #[tauri::command]
 fn multicli_baseline_info(runtime: State<'_, MultiCliRuntime>) -> Result<BaselineInfo, String> {
     Ok(BaselineInfo {
         product: "MultiCLI",
-        stage: "S03 — read-only history index and search",
+        stage: "S04 — managed terminal and process lifecycle",
         profile: runtime.profile().to_string(),
         data_root: runtime.root().display().to_string(),
         upstream_commit: "6c46345a727e7c1b57e0dacecb4fe063d88ee8dc",
@@ -637,6 +704,175 @@ fn multicli_resolve_resume_target(
     resolve_resume_target_impl(&service, &session_id)
 }
 
+// ---------------------------------------------------------------------------
+// S04 managed terminal commands
+// ---------------------------------------------------------------------------
+
+fn blocking_error(error: impl std::fmt::Display) -> AppError {
+    AppError::new(
+        ErrorCode::Io,
+        format!("the terminal worker did not finish: {error}"),
+    )
+    .with_details(serde_json::json!({ "stage": "terminalWorker" }))
+    .with_retryable(true)
+}
+
+#[tauri::command]
+fn multicli_terminal_targets(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalTargetsView, AppError> {
+    runtime.terminal()?.targets()
+}
+
+#[tauri::command]
+async fn multicli_terminal_open(
+    spec: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::terminal::TerminalView, AppError> {
+    let spec: TerminalOpenSpec = required_argument(spec, "spec")?;
+    let manager = runtime.terminal()?;
+    tauri::async_runtime::spawn_blocking(move || manager.open(&spec))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+fn multicli_terminal_list(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalListView, AppError> {
+    Ok(runtime.terminal()?.list())
+}
+
+#[tauri::command]
+fn multicli_terminal_read(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalReadView, AppError> {
+    let query: TerminalReadRequest = required_argument(query, "query")?;
+    runtime.terminal()?.read(&query)
+}
+
+#[tauri::command]
+async fn multicli_terminal_write(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalWriteView, AppError> {
+    let query: TerminalWriteRequest = required_argument(query, "query")?;
+    let manager = runtime.terminal()?;
+    tauri::async_runtime::spawn_blocking(move || manager.write(&query))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+fn multicli_terminal_resize(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalResizeView, AppError> {
+    let query: TerminalResizeRequest = required_argument(query, "query")?;
+    runtime.terminal()?.resize(&query)
+}
+
+#[tauri::command]
+async fn multicli_terminal_stop(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalStopView, AppError> {
+    let query: TerminalStopRequest = required_argument(query, "query")?;
+    let manager = runtime.terminal()?;
+    tauri::async_runtime::spawn_blocking(move || manager.stop(&query))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+async fn multicli_terminal_close(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalCloseView, AppError> {
+    let query: TerminalCloseRequest = required_argument(query, "query")?;
+    let manager = runtime.terminal()?;
+    tauri::async_runtime::spawn_blocking(move || manager.close(&query))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+async fn multicli_terminal_shutdown_all(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalShutdownAllView, AppError> {
+    let query: TerminalShutdownAllRequest = match query {
+        Some(value) => serde_json::from_value(value)
+            .map_err(|error| AppError::invalid_argument("query", error.to_string()))?,
+        None => TerminalShutdownAllRequest {
+            mode: Some(TerminalStopMode::Gentle),
+            grace_ms: None,
+        },
+    };
+    let manager = runtime.terminal()?;
+    tauri::async_runtime::spawn_blocking(move || manager.shutdown_all(&query))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+fn multicli_terminal_limits(runtime: State<'_, MultiCliRuntime>) -> Result<TerminalLimits, AppError> {
+    Ok(runtime.terminal()?.limits())
+}
+
+#[tauri::command]
+fn multicli_terminal_update_limits(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalLimits, AppError> {
+    let query: TerminalLimitsUpdate = required_argument(query, "query")?;
+    runtime.terminal()?.update_limits(&query)
+}
+
+#[tauri::command]
+fn multicli_terminal_quit_check(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<TerminalQuitCheckView, AppError> {
+    Ok(runtime.terminal()?.quit_check())
+}
+
+/// Explicit application exit. `confirm` must be `true`: the UI has already
+/// shown the choice, so there is no path where quitting silently kills a
+/// terminal. Only this application's own trees are stopped; external processes
+/// are never enumerated.
+#[tauri::command]
+async fn multicli_app_quit(
+    confirm: Option<bool>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<(), AppError> {
+    if confirm != Some(true) {
+        return Err(AppError::invalid_argument(
+            "confirm",
+            "must be true; quitting is never implicit",
+        ));
+    }
+    if let Ok(manager) = runtime.terminal() {
+        let request = TerminalShutdownAllRequest {
+            mode: Some(TerminalStopMode::Gentle),
+            grace_ms: Some(2_000),
+        };
+        tauri::async_runtime::spawn_blocking(move || manager.shutdown_all(&request))
+            .await
+            .map_err(blocking_error)??;
+    }
+    let app = runtime.app.lock().clone();
+    if let Some(app) = app {
+        app.exit(0);
+        return Ok(());
+    }
+    Err(AppError::new(
+        ErrorCode::Io,
+        "the application handle is not attached",
+    )
+    .with_details(serde_json::json!({ "stage": "quit" })))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PtySmoke {
@@ -772,6 +1008,56 @@ fn webview_data_directory(root: &Path, profile: &str) -> PathBuf {
     fallback
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// The tray "退出" entry never exits by itself: it asks the window, which shows
+/// the cancel-or-stop choice. A tray item that silently killed terminals would
+/// violate the S04 exit rule.
+fn request_quit(app: &tauri::AppHandle) {
+    use tauri::Emitter;
+    show_main_window(app);
+    let _ = app.emit(QUIT_REQUESTED_EVENT, ());
+}
+
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 MultiCLI", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let mut builder = TrayIconBuilder::with_id("multicli-tray")
+        .tooltip("MultiCLI")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => request_quit(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
 pub fn run() {
     let runtime = MultiCliRuntime::from_environment();
     let root = runtime.root().to_path_buf();
@@ -787,16 +1073,45 @@ pub fn run() {
     tauri::Builder::default()
         .manage(runtime)
         .setup(move |app| {
-            tauri::WebviewWindowBuilder::new(
+            let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("MultiCLI — S03")
+            .title("MultiCLI — S04")
             .inner_size(1320.0, 820.0)
             .min_inner_size(960.0, 640.0)
             .data_directory(webview_directory)
             .build()?;
+            {
+                use tauri::Manager;
+                let runtime = app.state::<MultiCliRuntime>();
+                runtime.attach_app(app.handle().clone());
+            }
+            // Closing the main window hides it to the tray: managed terminals
+            // keep draining in the background. Ending the application is an
+            // explicit choice from the tray, never a side effect of a close.
+            //
+            // Hiding is only installed when the tray really exists: an app that
+            // hides itself with no way back would be worse than an app that
+            // exits on close, so a tray failure degrades to "close == exit"
+            // (and `RunEvent::Exit` then ends only the owned trees).
+            let tray_ready = match build_tray(app.handle()) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("[multicli] tray icon unavailable, close will exit: {error}");
+                    false
+                }
+            };
+            if tray_ready {
+                let window_handle = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window_handle.hide();
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -821,17 +1136,31 @@ pub fn run() {
             multicli_get_session_metadata,
             multicli_list_session_messages,
             multicli_search_history,
-            multicli_resolve_resume_target
+            multicli_resolve_resume_target,
+            multicli_terminal_targets,
+            multicli_terminal_open,
+            multicli_terminal_list,
+            multicli_terminal_read,
+            multicli_terminal_write,
+            multicli_terminal_resize,
+            multicli_terminal_stop,
+            multicli_terminal_close,
+            multicli_terminal_shutdown_all,
+            multicli_terminal_limits,
+            multicli_terminal_update_limits,
+            multicli_terminal_quit_check,
+            multicli_app_quit
         ])
         .build(tauri::generate_context!())
         .expect("build MultiCLI")
         .run(|handle, event| {
             if let tauri::RunEvent::Exit = event {
-                // Ends only this application's own sampling thread. External
-                // CLIs keep running untouched.
+                // Ends only this application's own sampling threads and its own
+                // terminal trees. External CLIs keep running untouched.
                 if let Some(runtime) = tauri::Manager::try_state::<MultiCliRuntime>(handle) {
                     runtime.stop_discovery();
                     runtime.stop_history();
+                    runtime.stop_terminals();
                 }
             }
         });

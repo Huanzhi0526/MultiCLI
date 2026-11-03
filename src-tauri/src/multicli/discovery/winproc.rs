@@ -84,6 +84,23 @@ impl BackendError {
     }
 }
 
+fn hresult_win32_code(hresult: i32) -> Option<u32> {
+    let bits = hresult as u32;
+    let facility = (bits >> 16) & 0x1fff;
+    (facility == 7).then_some(bits & 0xffff)
+}
+
+fn map_process_api_error(pid: u32, hresult: i32, operation: &str) -> BackendError {
+    match hresult_win32_code(hresult) {
+        Some(5) => BackendError::access_denied(pid),
+        Some(87 | 1168) => BackendError::gone(pid),
+        _ => BackendError::failed(
+            Some(pid),
+            format!("{operation} failed with HRESULT 0x{:08X}", hresult as u32),
+        ),
+    }
+}
+
 /// The seam the discovery engine talks to. Real Windows snapshot and test
 /// doubles both implement it.
 pub trait HostBackend: Send + Sync {
@@ -227,12 +244,7 @@ mod windows_backend {
     }
 
     fn map_open_error(pid: u32, error: windows::core::Error) -> BackendError {
-        let code = error.code().0 as u32;
-        match code {
-            5 => BackendError::access_denied(pid),
-            87 | 1168 => BackendError::gone(pid),
-            _ => BackendError::failed(Some(pid), format!("OpenProcess failed with code {code}")),
-        }
+        map_process_api_error(pid, error.code().0, "OpenProcess")
     }
 
     fn process_creation_time(pid: u32) -> Result<String, BackendError> {
@@ -280,19 +292,11 @@ mod windows_backend {
                         Ok(Some(PathBuf::from(text)))
                     }
                 }
-                Err(error) => {
-                    let code = error.code().0 as u32;
-                    if code == 5 {
-                        Err(BackendError::access_denied(pid))
-                    } else if code == 87 || code == 1168 {
-                        Err(BackendError::gone(pid))
-                    } else {
-                        Err(BackendError::failed(
-                            Some(pid),
-                            format!("QueryFullProcessImageNameW failed with code {code}"),
-                        ))
-                    }
-                }
+                Err(error) => Err(map_process_api_error(
+                    pid,
+                    error.code().0,
+                    "QueryFullProcessImageNameW",
+                )),
             }
         }
     }
@@ -349,6 +353,24 @@ impl HostBackend for WindowsProcessBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn win32_hresult_errors_map_to_access_denied_gone_and_failed() {
+        let access_denied = map_process_api_error(17, 0x8007_0005u32 as i32, "OpenProcess");
+        assert_eq!(access_denied.kind, BackendFailure::AccessDenied);
+        assert_eq!(access_denied.pid, Some(17));
+
+        let invalid_parameter = map_process_api_error(17, 0x8007_0057u32 as i32, "OpenProcess");
+        assert_eq!(invalid_parameter.kind, BackendFailure::Gone);
+
+        let not_found = map_process_api_error(17, 0x8007_0490u32 as i32, "OpenProcess");
+        assert_eq!(not_found.kind, BackendFailure::Gone);
+
+        let e_fail = map_process_api_error(17, 0x8000_4005u32 as i32, "OpenProcess");
+        assert_eq!(e_fail.kind, BackendFailure::Failed);
+        assert!(e_fail.reason.contains("HRESULT 0x80004005"));
+        assert_eq!(hresult_win32_code(0x8000_4005u32 as i32), None);
+    }
 
     #[test]
     fn filetime_keeps_100ns_precision_and_converts_correctly() {

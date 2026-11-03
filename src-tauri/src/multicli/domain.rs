@@ -409,6 +409,13 @@ db_enum!(ExecutionStatus {
     Unknown => "unknown",
 });
 
+impl ExecutionStatus {
+    /// `exited` and `failed` are the only states a Run can never leave.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Exited | Self::Failed)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum InteractionStatus {

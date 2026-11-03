@@ -22,7 +22,7 @@ use std::sync::Arc;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
@@ -43,22 +43,34 @@ impl Drop for KillOnCloseJob {
     }
 }
 
-/// Put `child` into a fresh kill-on-close job and return the shared guard.
-/// The sweep fires when every clone of the returned Arc is gone.
-///
-/// `None` (with a log line) when the platform refuses — the caller then
-/// keeps the taskkill-based cleanup as its only backstop, exactly as today.
-/// Failure modes: the child already exited between spawn and assignment, or
-/// it sits inside a job that forbids nesting (rare since Windows 8).
-pub(crate) fn assign_kill_on_close(child: &tokio::process::Child) -> Option<Arc<KillOnCloseJob>> {
-    let raw = child.raw_handle()?;
-    let process = HANDLE(raw);
+impl KillOnCloseJob {
+    /// Ends every live member of the job. Used by the managed terminal when a
+    /// gentle stop timed out; it cannot reach a process outside this job.
+    pub(crate) fn terminate(&self) {
+        unsafe {
+            let _ = TerminateJobObject(self.0, 1);
+        }
+    }
+}
+
+/// Why a process could not be put under a job guard. The managed terminal
+/// treats this as a hard failure: running without the tree constraint would
+/// silently allow an orphan family, which is exactly what S04 forbids.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct JobFailure {
+    pub stage: &'static str,
+    pub reason: String,
+}
+
+fn job_for_process(process: HANDLE) -> Result<Arc<KillOnCloseJob>, JobFailure> {
     unsafe {
         let job = match CreateJobObjectW(None, None) {
             Ok(job) if !job.is_invalid() => job,
             _ => {
-                eprintln!("[engine] CreateJobObjectW failed; orphan sweep disabled for this run");
-                return None;
+                return Err(JobFailure {
+                    stage: "createJobObject",
+                    reason: "CreateJobObjectW failed".into(),
+                })
             }
         };
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
@@ -70,20 +82,62 @@ pub(crate) fn assign_kill_on_close(child: &tokio::process::Child) -> Option<Arc<
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         );
         if configured.is_err() {
-            eprintln!(
-                "[engine] SetInformationJobObject failed; orphan sweep disabled for this run"
-            );
             let _ = CloseHandle(job);
-            return None;
+            return Err(JobFailure {
+                stage: "setInformationJobObject",
+                reason: "SetInformationJobObject failed".into(),
+            });
         }
         if AssignProcessToJobObject(job, process).is_err() {
-            eprintln!(
-                "[engine] AssignProcessToJobObject failed; orphan sweep disabled for this run"
-            );
             let _ = CloseHandle(job);
-            return None;
+            return Err(JobFailure {
+                stage: "assignProcessToJobObject",
+                reason: "AssignProcessToJobObject failed (the process may already be in a \
+                         non-nesting job or may have exited)"
+                    .into(),
+            });
         }
-        Some(Arc::new(KillOnCloseJob(job)))
+        Ok(Arc::new(KillOnCloseJob(job)))
+    }
+}
+
+/// Job guard for a process that is not a `tokio::process::Child` (the managed
+/// terminal owns a portable-pty child, which exposes only its PID).
+pub(crate) fn job_for_pid(pid: u32) -> Result<Arc<KillOnCloseJob>, JobFailure> {
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+    unsafe {
+        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid).map_err(
+            |error| JobFailure {
+                stage: "openProcess",
+                reason: format!("OpenProcess failed with code {}", error.code().0),
+            },
+        )?;
+        let result = job_for_process(process);
+        let _ = CloseHandle(process);
+        result
+    }
+}
+
+/// Put `child` into a fresh kill-on-close job and return the shared guard.
+/// The sweep fires when every clone of the returned Arc is gone.
+///
+/// `None` (with a log line) when the platform refuses — the caller then
+/// keeps the taskkill-based cleanup as its only backstop, exactly as today.
+/// Failure modes: the child already exited between spawn and assignment, or
+/// it sits inside a job that forbids nesting (rare since Windows 8).
+pub(crate) fn assign_kill_on_close(child: &tokio::process::Child) -> Option<Arc<KillOnCloseJob>> {
+    let raw = child.raw_handle()?;
+    match job_for_process(HANDLE(raw)) {
+        Ok(guard) => Some(guard),
+        Err(failure) => {
+            eprintln!(
+                "[engine] {}: {}; orphan sweep disabled for this run",
+                failure.stage, failure.reason
+            );
+            None
+        }
     }
 }
 #[cfg(test)]

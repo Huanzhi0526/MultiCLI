@@ -76,6 +76,7 @@ const TARGETS: TerminalTargetsView = {
       agentId: "local-shell",
       product: null,
       installationId: null,
+      customCliId: null,
       executable: {
         hostId: "local-windows",
         displayPath: "C:\\Windows\\System32\\cmd.exe",
@@ -93,6 +94,7 @@ const TARGETS: TerminalTargetsView = {
       agentId: "codex",
       product: "Codex",
       installationId: "inst-1",
+      customCliId: null,
       executable: {
         hostId: "local-windows",
         displayPath: "C:\\npm\\codex.cmd",
@@ -110,6 +112,7 @@ const TARGETS: TerminalTargetsView = {
       agentId: "gone",
       product: "Gone",
       installationId: "inst-missing",
+      customCliId: null,
       executable: null,
       launchChain: "exe",
       status: "missing",
@@ -346,7 +349,12 @@ describe("managed terminal workspace", () => {
 
     expect(fake.opened).toHaveLength(1);
     const spec = fake.opened[0];
-    expect(spec.target).toEqual({ kind: "shell", shell: "cmd", installationId: null });
+    expect(spec.target).toEqual({
+      kind: "shell",
+      shell: "cmd",
+      installationId: null,
+      customCliId: null,
+    });
     expect(spec.args).toEqual([]);
     expect(spec.cwd).toBe("C:\\Work\\中文 目录");
     expect(spec.env).toEqual([]);
@@ -393,6 +401,7 @@ describe("managed terminal workspace", () => {
       kind: "installation",
       shell: null,
       installationId: "inst-1",
+      customCliId: null,
     });
     expect(fake.opened[0].args).toEqual(["a b", "c&d", "\"quoted\""]);
     expect(fake.opened[0].env).toEqual([{ name: "MULTICLI_S04", value: "1" }]);

@@ -165,6 +165,7 @@ impl TerminalManager {
                 agent_id: Some(LOCAL_SHELL_AGENT_ID.to_string()),
                 product: None,
                 installation_id: None,
+                custom_cli_id: None,
                 executable: Some(host_path(&self.host_id, &shell.path)),
                 launch_chain: Some(LaunchChain::Exe),
                 status: if shell.exists { "ready" } else { "missing" }.into(),
@@ -180,6 +181,9 @@ impl TerminalManager {
         let installations = self.service.list_all_installations(&self.host_id)?;
         for installation in installations {
             items.push(self.installation_target(&installation, &agents));
+        }
+        for custom in self.service.list_custom_clis(&self.host_id)? {
+            items.push(self.custom_target(&custom));
         }
         Ok(TerminalTargetsView {
             schema_version: TERMINAL_SCHEMA_VERSION,
@@ -234,6 +238,9 @@ impl TerminalManager {
                 ),
             (true, Some(_), Some(_)) => ("ready", None),
         };
+        let kind_note = crate::multicli::discovery::signature::SignatureRegistry::standard()
+            .by_agent(&installation.agent_id)
+            .map(|signature| signature.kind.terminal_note());
         TerminalTargetView {
             id: format!("installation:{}", installation.id),
             kind: TerminalTargetKind::Installation,
@@ -245,11 +252,59 @@ impl TerminalManager {
             agent_id: Some(installation.agent_id.clone()),
             product,
             installation_id: Some(installation.id.clone()),
+            custom_cli_id: None,
             executable: Some(host_path(&self.host_id, &path)),
             launch_chain: chain,
             status: status.into(),
-            reason,
+            reason: match (&reason, kind_note) {
+                (Some(reason), _) => Some(reason.clone()),
+                (None, Some(note)) => Some(note.to_string()),
+                (None, None) => None,
+            },
             version: installation.version.clone(),
+        }
+    }
+
+    fn custom_target(&self, custom: &crate::multicli::CustomCliView) -> TerminalTargetView {
+        let path = PathBuf::from(
+            custom
+                .executable
+                .canonical_path
+                .clone()
+                .unwrap_or_else(|| custom.executable.display_path.clone()),
+        );
+        let exists = path.is_file();
+        let chain = LaunchChain::for_extension(&path);
+        let (status, reason) = match (exists, chain) {
+            (false, _) => (
+                "missing",
+                Some("可执行文件不存在；不会启动一个已失效的自定义 CLI".to_string()),
+            ),
+            (true, None) => (
+                "unsupported",
+                Some("扩展名不属于 .exe/.cmd/.bat/.ps1，未实现该启动链".to_string()),
+            ),
+            (true, Some(_)) => (
+                "ready",
+                Some(
+                    "用户本地定义：历史与额度默认 unsupported；参数按 S04 参数链转义，exit 与进程树仍由本应用管理。"
+                        .to_string(),
+                ),
+            ),
+        };
+        TerminalTargetView {
+            id: format!("custom:{}", custom.id),
+            kind: TerminalTargetKind::CustomCli,
+            label: format!("{} · {}", custom.label, custom.executable.display_path),
+            agent_id: None,
+            product: custom.product_hint.clone(),
+            installation_id: None,
+            custom_cli_id: Some(custom.id.clone()),
+            executable: Some(custom.executable.clone()),
+            launch_chain: chain,
+            status: status.into(),
+            reason,
+            version: None,
         }
     }
 
@@ -271,6 +326,7 @@ impl TerminalManager {
                     chain: LaunchChain::Exe,
                     shell_flavor: Some(flavor),
                     version: None,
+                    preset_args: Vec::new(),
                 })
             }
             TerminalTargetKind::Installation => {
@@ -356,6 +412,62 @@ impl TerminalManager {
                     chain,
                     shell_flavor: None,
                     version: installation.version,
+                    preset_args: Vec::new(),
+                })
+            }
+            TerminalTargetKind::CustomCli => {
+                let custom_id = spec.target.custom_cli_id.clone().ok_or_else(|| {
+                    AppError::invalid_argument(
+                        "target.customCliId",
+                        "is required for a custom CLI target",
+                    )
+                })?;
+                let row = self
+                    .service
+                    .custom_cli(&self.host_id, &custom_id)?
+                    .ok_or_else(|| {
+                        AppError::new(
+                            ErrorCode::NotFound,
+                            "the selected custom CLI is not registered for this host",
+                        )
+                        .with_details(serde_json::json!({
+                            "entity": "customCli",
+                            "id": custom_id,
+                        }))
+                    })?;
+                let path = PathBuf::from(&row.executable_canonical_path);
+                if !path.is_file() {
+                    return Err(AppError::new(
+                        ErrorCode::Unsupported,
+                        "the custom CLI executable no longer exists",
+                    )
+                    .with_details(serde_json::json!({
+                        "stage": "resolveTarget",
+                        "customCliId": row.id,
+                    })));
+                }
+                let chain = LaunchChain::for_extension(&path).ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::Unsupported,
+                        "this executable extension has no implemented launch chain",
+                    )
+                    .with_details(serde_json::json!({
+                        "stage": "resolveTarget",
+                        "customCliId": row.id,
+                    }))
+                })?;
+                Ok(PinnedTarget {
+                    kind: TerminalTargetKind::CustomCli,
+                    label: row.label.clone(),
+                    product: row.product_hint.clone(),
+                    // A custom CLI is explicitly *not* a product identity.
+                    agent_id: LOCAL_SHELL_AGENT_ID.into(),
+                    installation_id: None,
+                    executable: path,
+                    chain,
+                    shell_flavor: None,
+                    version: None,
+                    preset_args: row.args.clone(),
                 })
             }
         }
@@ -431,7 +543,18 @@ impl TerminalManager {
 
         self.begin_run(&run_id, &session_id, &terminal_id, &target, &title, &started_at, &spec.cwd)?;
 
-        let plan = match plan_launch(&target, &spec.args, &terminal_id, &self.launch_paths) {
+        // A custom CLI's preset argv is prepended here and goes through the same
+        // escaping as any user token.
+        let args = target.effective_args(&spec.args);
+        if args.len() > 320 {
+            let error = AppError::invalid_argument(
+                "args",
+                "preset and user arguments together exceed 320 tokens",
+            );
+            self.fail_run(&run_id, &error);
+            return Err(error);
+        }
+        let plan = match plan_launch(&target, &args, &terminal_id, &self.launch_paths) {
             Ok(plan) => plan,
             Err(error) => {
                 self.fail_run(&run_id, &error);
@@ -449,7 +572,7 @@ impl TerminalManager {
             plan.fingerprint,
             target.chain.as_str(),
             cwd.display_path,
-            spec.args.len(),
+            args.len(),
             spec.env.iter().map(|value| value.name.clone()).collect::<Vec<_>>(),
             chain_note(target.chain)
         );
@@ -513,7 +636,7 @@ impl TerminalManager {
             product: target.product.clone(),
             plan: plan.clone(),
             cwd: cwd.clone(),
-            args: spec.args.clone(),
+            args,
             env_names: spec.env.iter().map(|item| item.name.clone()).collect(),
             env: env_pairs(&spec.env),
             limits,

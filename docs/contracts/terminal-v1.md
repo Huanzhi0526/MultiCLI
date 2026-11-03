@@ -21,17 +21,22 @@
 
 ## 2. 目标（Target）
 
-目标只有两类，都来自本机真实存在的对象：
+目标有三类，都来自本机真实存在的对象：
 
 | kind | 选择依据 | 固定内容 |
 |---|---|---|
 | `shell` | `shell` 字段：`cmd` / `windows-powershell` / `pwsh` | `%SystemRoot%\System32\cmd.exe`、`WindowsPowerShell\v1.0\powershell.exe`，或 PATH 上的 `pwsh.exe` |
 | `installation` | `installationId`（`agent_installations` 行） | 该行记录的可执行文件路径（canonical 优先） |
+| `custom-cli`（S06） | `customCliId`（`custom_clis` 行） | 用户本地导入的可执行文件 canonical 路径 + 预设 argv；见 `usage-v1.md` §5 |
 
 - `shell` 目标**不接受** `args`：它的 argv 是固定 launcher 形式（`cmd /d /q /k chcp 65001>nul`、
   `powershell -NoLogo -NoProfile`），用户文本没有机会变成 shell 命令。
-- `installation` 目标的启动链由扩展名决定，且只有三条：`.exe` → `exe`、`.cmd`/`.bat` → `cmd`、
-  `.ps1` → `powershell`。其它扩展名返回 `unsupported`，不做猜测。
+- `installation` 与 `custom-cli` 目标的启动链由扩展名决定，且只有三条：`.exe` → `exe`、
+  `.cmd`/`.bat` → `cmd`、`.ps1` → `powershell`。其它扩展名返回 `unsupported`，不做猜测。
+- `custom-cli` 的**预设参数排在用户参数之前**，两者一起进入同一条启动链；预设只是 argv 前缀，
+  不是新的拼接机制。预设与用户参数合计超过 320 条时创建直接拒绝。
+- 自定义 CLI 运行时的 `agent_id` 固定为本地 shell 占位（`local-shell`），
+  不会被当成任何产品身份；它的历史与额度恒为 `unsupported`。
 - 目标列表 `multicli_terminal_targets` 的 `status` 为 `ready` / `missing` / `unsupported`，
   并带 `reason`；`missing` 表示文件已不存在，选中它会在创建时明确失败。
 

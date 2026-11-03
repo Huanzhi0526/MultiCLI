@@ -167,6 +167,128 @@ pub fn parse_shim(shim: &Path) -> Result<WrapperParse, WrapperIssue> {
     })
 }
 
+/// Parses a `.cmd`/`.bat`/`.ps1` shim that forwards to a **native executable in
+/// its own directory**, without executing it.
+///
+/// This shape became common when npm packages started shipping a native image
+/// (`opencode-ai` → `bin/opencode.exe`, TRAE CLI → `traex.exe`). Treating such a
+/// shim as a Node wrapper produced a spurious `unverified` row next to the real
+/// installation, so the forwarder is resolved to the executable it names.
+///
+/// The same conservative rules apply: the file is read as data (size capped),
+/// only shim-local variables are expanded, the recovered target must be inside
+/// the shim directory, must exist and must have an `.exe`/`.com` extension.
+/// Anything else returns `None` and the caller falls back to the Node-shim
+/// parser.
+///
+/// Only the **command position** of a statement counts. A path that is printed
+/// (`echo`, `Write-Output`), assigned (`$x = …`), passed to another command
+/// (`copy …`) or written in a comment is data, not a forward. Quoting is
+/// honoured, so a directory containing spaces survives as one token — splitting
+/// on whitespace would silently truncate the path.
+pub fn parse_native_shim(shim: &Path) -> Option<PathBuf> {
+    let extension = extension_lower(shim);
+    if !matches!(extension.as_str(), "cmd" | "bat" | "ps1") {
+        return None;
+    }
+    let metadata = std::fs::metadata(shim).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_SHIM_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(shim).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let directory = shim.parent()?;
+    let directory_canonical = std::fs::canonicalize(directory).ok()?;
+    let expanded = expand_shim_variables(&text, directory);
+    for line in expanded.lines() {
+        // `@` only suppresses echo in cmd; it is not part of the command.
+        let trimmed = line.trim().trim_start_matches('@').trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("::") {
+            continue;
+        }
+        // PowerShell's call operator at the start of a statement is a prefix,
+        // not a statement separator (`&&` still separates).
+        let trimmed = if trimmed.starts_with('&') && !trimmed.starts_with("&&") {
+            trimmed[1..].trim_start()
+        } else {
+            trimmed
+        };
+        let mut tokens = first_command_tokens(trimmed);
+        // A PowerShell call operator (or `call` in cmd) is a prefix, not the
+        // command itself.
+        while tokens
+            .first()
+            .is_some_and(|token| token == "&" || token == "." || token.eq_ignore_ascii_case("call"))
+        {
+            tokens.remove(0);
+        }
+        let Some(command) = tokens.first() else {
+            continue;
+        };
+        let lower = command.to_ascii_lowercase();
+        if !lower.ends_with(".exe") && !lower.ends_with(".com") {
+            // `echo`, `rem`, `set`, `Write-Output`, `$var`, `if`, `copy`, … —
+            // whatever it is, it is not this shim executing a native image.
+            continue;
+        }
+        let raw = command.replace('/', "\\");
+        let candidate = if raw.contains('\\') {
+            PathBuf::from(&raw)
+        } else {
+            // A bare name is resolved next to the shim, like cmd would.
+            directory.join(&raw)
+        };
+        let Ok(canonical) = std::fs::canonicalize(&candidate) else {
+            continue;
+        };
+        if canonical.starts_with(&directory_canonical) && canonical.is_file() {
+            return Some(canonical);
+        }
+    }
+    None
+}
+
+/// Tokens of the **first** command of one shim line.
+///
+/// Quoting is honoured (double quotes, and single quotes for PowerShell), so a
+/// path with spaces stays one token. `&`, `|`, comparisons and redirections end
+/// the command; everything after them belongs to another statement and must not
+/// be mistaken for the forwarded executable.
+fn first_command_tokens(line: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for character in line.chars() {
+        if let Some(active) = quote {
+            if character == active {
+                quote = None;
+            } else {
+                current.push(character);
+            }
+            continue;
+        }
+        match character {
+            '"' | '\'' => quote = Some(character),
+            ' ' | '\t' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            '&' | '|' | '>' | '<' | '(' | ')' | ';' | ',' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                return tokens;
+            }
+            _ => current.push(character),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
 /// Expands only the shim-local variables. Every other `%VAR%`/`$VAR` stays
 /// literal and is therefore never resolved from the environment.
 pub fn expand_shim_variables(text: &str, directory: &Path) -> String {
@@ -424,5 +546,94 @@ node "%dp0%\payload\data.txt" %*
         assert!(expanded.contains("%USERPROFILE%"));
         assert!(expanded.contains("%TOKEN%"));
         assert!(expanded.contains("$env:API_KEY"));
+    }
+
+    // -----------------------------------------------------------------------
+    // R1: forwarding syntax
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_quoted_cmd_forwarder_survives_a_directory_with_spaces() {
+        let root = temp_dir("native shim space");
+        fs::write(root.join("traex.exe"), b"MZ synthetic").unwrap();
+        fs::write(
+            root.join("traecli.cmd"),
+            "@echo off\r\n\"%~dp0traex.exe\" %*\r\n",
+        )
+        .unwrap();
+        let parsed = parse_native_shim(&root.join("traecli.cmd")).expect("quoted forwarder");
+        assert_eq!(parsed, fs::canonicalize(root.join("traex.exe")).unwrap());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_quoted_powershell_forwarder_survives_a_directory_with_spaces() {
+        let root = temp_dir("native ps1 space");
+        fs::write(root.join("traex.exe"), b"MZ synthetic").unwrap();
+        fs::write(
+            root.join("traecli.ps1"),
+            "& \"$PSScriptRoot\\traex.exe\" @args\n",
+        )
+        .unwrap();
+        let parsed = parse_native_shim(&root.join("traecli.ps1")).expect("quoted forwarder");
+        assert_eq!(parsed, fs::canonicalize(root.join("traex.exe")).unwrap());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn printing_a_path_does_not_forward_to_that_executable() {
+        let root = temp_dir("native-output");
+        fs::write(root.join("traex.exe"), b"MZ synthetic").unwrap();
+        fs::write(
+            root.join("traecli.ps1"),
+            "$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\nWrite-Output \"$basedir/traex.exe\"\n",
+        )
+        .unwrap();
+        assert!(
+            parse_native_shim(&root.join("traecli.ps1")).is_none(),
+            "printing a path does not forward to that executable"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn echo_assignment_comment_and_argument_positions_are_not_execution() {
+        let root = temp_dir("native-noise");
+        fs::write(root.join("traex.exe"), b"MZ synthetic").unwrap();
+        let shim = root.join("traecli.cmd");
+        for body in [
+            "echo \"%~dp0traex.exe\"",
+            "rem \"%~dp0traex.exe\" %*",
+            ":: \"%~dp0traex.exe\" %*",
+            "set TARGET=\"%~dp0traex.exe\"",
+            "copy \"%~dp0traex.exe\" \"%TEMP%\\traex.exe\"",
+            "echo off & \"%~dp0traex.exe\" %*",
+        ] {
+            fs::write(&shim, body).unwrap();
+            assert!(
+                parse_native_shim(&shim).is_none(),
+                "this line is not a forward: {body}"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_target_outside_the_shim_directory_is_refused() {
+        let root = temp_dir("native-escape");
+        let elsewhere = temp_dir("native-elsewhere");
+        fs::write(elsewhere.join("traex.exe"), b"MZ synthetic").unwrap();
+        let shim = root.join("traecli.cmd");
+        fs::write(
+            &shim,
+            format!("\"{}\" %*\r\n", elsewhere.join("traex.exe").display()),
+        )
+        .unwrap();
+        assert!(
+            parse_native_shim(&shim).is_none(),
+            "a forwarder must not point outside its own directory"
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&elsewhere);
     }
 }

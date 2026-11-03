@@ -79,6 +79,10 @@ impl ShellFlavor {
 pub enum TerminalTargetKind {
     Shell,
     Installation,
+    /// A user-defined `executable + argv[] + cwd` preset (S06). It reuses the
+    /// same launch chain as an installation; only its origin differs.
+    #[serde(rename = "custom-cli")]
+    CustomCli,
 }
 
 /// What the user picked. Exactly one of `shell` / `installationId` is set.
@@ -90,13 +94,15 @@ pub struct TerminalTarget {
     pub shell: Option<ShellFlavor>,
     #[serde(default)]
     pub installation_id: Option<String>,
+    #[serde(default)]
+    pub custom_cli_id: Option<String>,
 }
 
 impl TerminalTarget {
     pub fn validate(&self) -> Result<(), AppError> {
         match self.kind {
             TerminalTargetKind::Shell => {
-                if self.installation_id.is_some() {
+                if self.installation_id.is_some() || self.custom_cli_id.is_some() {
                     return Err(AppError::invalid_argument(
                         "target.installationId",
                         "must be absent for a shell target",
@@ -116,12 +122,41 @@ impl TerminalTarget {
                         "must be absent for an installation target",
                     ));
                 }
+                if self.custom_cli_id.is_some() {
+                    return Err(AppError::invalid_argument(
+                        "target.customCliId",
+                        "must be absent for an installation target",
+                    ));
+                }
                 match self.installation_id.as_deref() {
                     Some(id) if !id.trim().is_empty() => {}
                     _ => {
                         return Err(AppError::invalid_argument(
                             "target.installationId",
                             "is required for an installation target",
+                        ))
+                    }
+                }
+            }
+            TerminalTargetKind::CustomCli => {
+                if self.shell.is_some() {
+                    return Err(AppError::invalid_argument(
+                        "target.shell",
+                        "must be absent for a custom CLI target",
+                    ));
+                }
+                if self.installation_id.is_some() {
+                    return Err(AppError::invalid_argument(
+                        "target.installationId",
+                        "must be absent for a custom CLI target",
+                    ));
+                }
+                match self.custom_cli_id.as_deref() {
+                    Some(id) if !id.trim().is_empty() => {}
+                    _ => {
+                        return Err(AppError::invalid_argument(
+                            "target.customCliId",
+                            "is required for a custom CLI target",
                         ))
                     }
                 }
@@ -755,6 +790,8 @@ pub struct TerminalTargetView {
     pub agent_id: Option<String>,
     pub product: Option<String>,
     pub installation_id: Option<String>,
+    /// Set only for a custom CLI target (`kind = custom-cli`).
+    pub custom_cli_id: Option<String>,
     pub executable: Option<HostPath>,
     pub launch_chain: Option<LaunchChain>,
     /// `ready` | `missing` | `unsupported` | `unverified`
@@ -881,6 +918,7 @@ mod tests {
             kind: TerminalTargetKind::Shell,
             shell: Some(ShellFlavor::Cmd),
             installation_id: Some("i-1".into()),
+            custom_cli_id: None,
         };
         assert!(mixed.validate().is_err());
 
@@ -888,6 +926,7 @@ mod tests {
             kind: TerminalTargetKind::Shell,
             shell: None,
             installation_id: None,
+            custom_cli_id: None,
         };
         assert!(missing_shell.validate().is_err());
 
@@ -895,6 +934,7 @@ mod tests {
             kind: TerminalTargetKind::Installation,
             shell: None,
             installation_id: Some("  ".into()),
+            custom_cli_id: None,
         };
         assert!(installation_without_id.validate().is_err());
 
@@ -902,6 +942,7 @@ mod tests {
             kind: TerminalTargetKind::Installation,
             shell: None,
             installation_id: Some("i-1".into()),
+            custom_cli_id: None,
         };
         assert!(ok.validate().is_ok());
     }
@@ -914,6 +955,7 @@ mod tests {
                 kind: TerminalTargetKind::Shell,
                 shell: Some(ShellFlavor::Cmd),
                 installation_id: None,
+                custom_cli_id: None,
             },
             args: Vec::new(),
             cwd: cwd.clone(),

@@ -5,6 +5,7 @@
 //! query service used by the navigation UI, and the redacted diagnostics
 //! document. Product IPC is registered in `multicli_bootstrap`.
 
+pub mod custom;
 pub mod diagnostics;
 pub mod discovery;
 pub mod domain;
@@ -13,6 +14,7 @@ pub mod history;
 pub mod path;
 pub mod runtime;
 pub mod terminal;
+pub mod usage;
 mod repo;
 mod service;
 mod store;
@@ -35,5 +37,11 @@ pub use path::{
     workspace_from_resolved, GitStatus, PathResolutionError, PathResolutionStatus,
     ResolvedWorkspacePath,
 };
+pub use custom::{CustomCliInput, CustomCliView};
 pub use service::MultiCliService;
+pub use usage::{
+    ProviderCatalogEntry, QuotaPool, RefreshOutcome, UsageAccountView, UsageCenter,
+    UsageOverviewView, UsageRefreshRequest, UsageRefreshResult, UsageSample, UsageSnapshot,
+    UsageStatus,
+};
 pub use store::{BackupInfo, MigrationReport, MultiCliStore, SCHEMA_VERSION};

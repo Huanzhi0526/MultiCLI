@@ -16,7 +16,7 @@ use super::signature::{
     extension_lower, file_name_lower, file_stem_lower, normalize_key, EntryKind, InstallRootKind,
     InstallSignature, SignatureRegistry,
 };
-use super::wrapper::{parse_shim, NodeInterpreter, WrapperIssue};
+use super::wrapper::{parse_native_shim, parse_shim, NodeInterpreter, WrapperIssue};
 use crate::multicli::domain::HostPath;
 use crate::multicli::path::{canonical_text, normalize_display_path, stable_hash};
 use std::collections::BTreeMap;
@@ -318,6 +318,15 @@ fn examine_entry(
         if !signature.matches_wrapper_name(&stem) {
             return None;
         }
+        // A shim that forwards to a native image in its own directory is the
+        // same installation as that image, not a second, unverified one.
+        if let Some(target) = parse_native_shim(path) {
+            if signature.matches_native_name(&file_name_lower(&target)) {
+                let mut candidate = native_candidate(&target, signature, source, host_id);
+                candidate.discovered_from = format!("{source}:{}", file_name_lower(path));
+                return Some(candidate);
+            }
+        }
         return Some(wrapper_candidate(path, signature, source, host_id));
     }
 
@@ -597,6 +606,7 @@ pub fn installation_id(host_id: &str, agent_id: &str, identity: &str) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::multicli::discovery::signature::ProductKind;
     use std::fs;
 
     fn temp_root(name: &str) -> PathBuf {
@@ -718,6 +728,235 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), unique);
+    }
+
+    // -----------------------------------------------------------------------
+    // S06 extension families: real file layouts, not brand words
+    // -----------------------------------------------------------------------
+
+    fn write(path: &Path, contents: impl AsRef<[u8]>) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn an_npm_shim_of_an_extension_family_is_one_installed_entry() {
+        let root = temp_root("gemini-shim");
+        write(
+            &root.join("node_modules/@google/gemini-cli/bundle/gemini.js"),
+            "#!/usr/bin/env node\n",
+        );
+        write(
+            &root.join("gemini.cmd"),
+            "@echo off\r\n\"%dp0%\\node.exe\"  \"%dp0%\\node_modules\\@google\\gemini-cli\\bundle\\gemini.js\" %*\r\n",
+        );
+        let scan = scan_installations(&registry(), &env_with(&root), "local-windows");
+        let gemini = scan
+            .installations
+            .iter()
+            .filter(|item| item.agent_id == "gemini")
+            .collect::<Vec<_>>();
+        assert_eq!(gemini.len(), 1, "a cmd shim must not double count");
+        assert_eq!(gemini[0].status, InstallStatus::Installed);
+        assert_eq!(gemini[0].entry_kind, EntryKind::CmdWrapper);
+        assert!(gemini[0].identity.starts_with("package:"));
+    }
+
+    #[test]
+    fn a_same_name_binary_outside_a_declared_root_stays_unverified() {
+        let root = temp_root("copilot-shim");
+        write(&root.join("copilot-shim/copilot.exe"), b"MZ");
+        let mut environment = env_with(&root);
+        environment.path_dirs.push(root.join("copilot-shim"));
+        let scan = scan_installations(&registry(), &environment, "local-windows");
+        let copilot = scan
+            .installations
+            .iter()
+            .find(|item| item.agent_id == "copilot")
+            .expect("the PATH hit is still reported");
+        assert_eq!(
+            copilot.status,
+            InstallStatus::Unverified,
+            "an IDE shim is not an installation"
+        );
+        assert_eq!(
+            copilot.issue_code.as_deref(),
+            Some("unverified-native-location")
+        );
+        assert!(!copilot.is_runnable());
+    }
+
+    #[test]
+    fn a_native_extension_binary_inside_the_package_bin_is_installed() {
+        let root = temp_root("opencode-native");
+        write(
+            &root.join("roaming/npm/node_modules/opencode-ai/bin/opencode.exe"),
+            b"MZ",
+        );
+        let scan = scan_installations(&registry(), &env_with(&root), "local-windows");
+        let opencode = scan
+            .installations
+            .iter()
+            .find(|item| item.agent_id == "opencode")
+            .expect("opencode");
+        assert_eq!(opencode.status, InstallStatus::Installed);
+        assert_eq!(opencode.entry_kind, EntryKind::NativeExe);
+    }
+
+    #[test]
+    fn a_python_console_script_is_an_exe_entry_and_a_download_copy_is_not() {
+        let root = temp_root("aider");
+        write(&root.join("profile/.local/bin/aider.exe"), b"MZ");
+        write(&root.join("downloads/aider.exe"), b"MZ");
+        let mut environment = env_with(&root);
+        environment.path_dirs.push(root.join("downloads"));
+        let scan = scan_installations(&registry(), &environment, "local-windows");
+        let aider = scan
+            .installations
+            .iter()
+            .filter(|item| item.agent_id == "aider")
+            .collect::<Vec<_>>();
+        assert_eq!(aider.len(), 2, "one declared install, one foreign copy");
+        assert!(aider
+            .iter()
+            .any(|item| item.status == InstallStatus::Installed
+                && item.entry_kind == EntryKind::NativeExe));
+        assert!(aider.iter().any(|item| item.status == InstallStatus::Unverified));
+    }
+
+    #[test]
+    fn the_observed_trae_cli_is_found_but_the_ide_binary_is_not_it() {
+        let root = temp_root("trae");
+        write(&root.join("local/Programs/TraeCLI/bin/traex.exe"), b"MZ");
+        write(&root.join("local/Programs/Trae CN/Trae CN.exe"), b"MZ");
+        let scan = scan_installations(&registry(), &env_with(&root), "local-windows");
+        let trae = scan
+            .installations
+            .iter()
+            .filter(|item| item.agent_id == "trae")
+            .collect::<Vec<_>>();
+        assert_eq!(trae.len(), 1);
+        assert_eq!(trae[0].status, InstallStatus::Installed);
+        assert!(trae[0].executable.as_ref().unwrap().display_path.ends_with("traex.exe"));
+        let standard = registry();
+        let signature = standard.by_agent("trae").unwrap();
+        assert_eq!(signature.kind, ProductKind::ObservedOnly);
+    }
+
+    #[test]
+    fn every_extension_family_is_recognised_from_its_published_layout() {
+        let root = temp_root("extensions");
+        // Each layout mirrors the package `bin` map read from the registry.
+        let shims: &[(&str, &str, &str)] = &[
+            ("gemini", "@google/gemini-cli/bundle/gemini.js", "gemini"),
+            ("qwen", "@qwen-code/qwen-code/cli-entry.js", "qwen"),
+            ("copilot", "@github/copilot/npm-loader.js", "copilot"),
+            ("kimi", "@moonshot-ai/kimi-code/dist/main.mjs", "kimi"),
+        ];
+        for (agent, entry, shim) in shims {
+            write(&root.join(format!("roaming/npm/node_modules/{entry}")), "#!/usr/bin/env node\n");
+            let script = entry.replace('/', "\\\\");
+            write(
+                &root.join(format!("roaming/npm/{shim}.cmd")),
+                format!(
+                    "@echo off\r\n\"%dp0%\\node.exe\"  \"%dp0%\\node_modules\\{script}\" %*\r\n"
+                ),
+            );
+        }
+        // OpenCode ships a native image inside the package.
+        write(
+            &root.join("roaming/npm/node_modules/opencode-ai/bin/opencode.exe"),
+            b"MZ",
+        );
+        // Aider is a Python console script.
+        write(&root.join("profile/.local/bin/aider.exe"), b"MZ");
+
+        let scan = scan_installations(&registry(), &env_with(&root), "local-windows");
+        for agent in ["gemini", "opencode", "qwen", "copilot", "kimi", "aider"] {
+            let matches: Vec<&DetectedInstallation> = scan
+                .installations
+                .iter()
+                .filter(|item| item.agent_id == agent && item.status == InstallStatus::Installed)
+                .collect();
+            assert_eq!(
+                matches.len(),
+                1,
+                "{agent} must resolve to exactly one installed entry (found {:?})",
+                scan.installations
+                    .iter()
+                    .filter(|item| item.agent_id == agent)
+                    .map(|item| (item.status, item.issue_code.clone()))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn a_shim_that_forwards_to_a_local_native_image_is_the_same_installation() {
+        let root = temp_root("native-shim");
+        let bin = root.join("local/Programs/TraeCLI/bin");
+        write(&bin.join("traex.exe"), b"MZ");
+        write(
+            &bin.join("traecli.cmd"),
+            "@echo off
+\"%~dp0traex.exe\" %*
+",
+        );
+        write(
+            &bin.join("trae-cli.cmd"),
+            "@echo off
+\"%~dp0traex.exe\" %*
+",
+        );
+        let scan = scan_installations(&registry(), &env_with(&root), "local-windows");
+        let trae = scan
+            .installations
+            .iter()
+            .filter(|item| item.agent_id == "trae")
+            .collect::<Vec<_>>();
+        assert_eq!(trae.len(), 1, "two forwarding shims add no rows");
+        assert_eq!(trae[0].status, InstallStatus::Installed);
+        assert_eq!(trae[0].entry_kind, EntryKind::NativeExe);
+        assert!(trae[0].identity.starts_with("canonical:"));
+    }
+
+    #[test]
+    fn a_shim_pointing_outside_its_directory_is_not_upgraded() {
+        let root = temp_root("foreign-shim");
+        write(&root.join("elsewhere/traex.exe"), b"MZ");
+        write(
+            &root.join("local/Programs/TraeCLI/bin/traecli.cmd"),
+            r#"@echo off
+"C:\Windows\System32\traex.exe" %*"#,
+        );
+        let scan = scan_installations(&registry(), &env_with(&root), "local-windows");
+        let trae = scan
+            .installations
+            .iter()
+            .find(|item| item.agent_id == "trae")
+            .expect("the shim is still reported");
+        assert_ne!(
+            trae.status,
+            InstallStatus::Installed,
+            "a shim must not resolve to a binary outside its own directory"
+        );
+    }
+
+    #[test]
+    fn an_empty_package_directory_is_residue_for_extension_families_too() {
+        let root = temp_root("kimi-residue");
+        fs::create_dir_all(root.join("roaming/npm/node_modules/@moonshot-ai/kimi-code")).unwrap();
+        let scan = scan_installations(&registry(), &env_with(&root), "local-windows");
+        let kimi = scan
+            .installations
+            .iter()
+            .find(|item| item.agent_id == "kimi")
+            .expect("residue is reported");
+        assert_eq!(kimi.status, InstallStatus::HistoricalResidue);
+        assert_eq!(kimi.issue_code.as_deref(), Some("historical-residue"));
+        assert!(!kimi.is_runnable());
     }
 
     #[test]

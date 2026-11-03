@@ -1,3 +1,5 @@
+当前更新（2026-11-03）：S00–S06 ACCEPTED。以下表部分为历史时点，S06当前证据以本段与末段、[S06验收](docs/execution/S06-ACCEPTANCE.md)为准。
+
 # MultiCLI 兼容性实测表
 
 更新至 2026-11-03，S00–S05整阶段已ACCEPTED。当前S05实际版本/交互覆盖以下表为准；更早失败与NOT_RUN是历史时点，保留在末段。版本/协议列保留 2026-11-01 的 S00 CLI 探针；历史列为 S03 独立副本实测，PTY 启动范围见末段。S01 的实际 IPC、双向导航、路径/worktree 与诊断已验收，但会话/能力为显式合成 fixture。版本/帮助、自报握手能力、fixture、真实产品端到端分别记录；未知写 UNVERIFIED/NOT_RUN，不用一个勾代替。
@@ -45,3 +47,7 @@ S05（2026-11-03，原开发自测 SUBMITTED；主管初验 **REWORK_REQUIRED**�
 S05-R1主管独立复验：311领域/71前端/11bootstrap/4fixture/4平台及构建通过，原10个反例全部通过；新7个边界反例失败（6个P1、1个P2），整阶段仍REWORK_REQUIRED，已准备R2手动卡。R1真实模型链是开发观察，主管本轮只做代码/回归/合成验证，没有重复真实模型或实窗；Codex真实resume和CodeBuddy正文等保留NOT_RUN。用户普通codebuddy可用与ACP认证报错并存，不能再直接断言“独立CLI未登录”；未调用强制logout的authenticate或采集返回token的扩展。以上更新覆盖前述初验时点的网络/认证推断，历史记录保留。详见[S05当前验收](docs/execution/S05-ACCEPTANCE.md)。
 
 S05-R2（2026-11-03）当前覆盖：两轮返工后Sol亲自收尾并独立验收ACCEPTED。完整332领域/73前端/11bootstrap/4fixture/4平台及构建、原17反例与新增生命周期/ACP全文/重启观察边界通过。三核心真实有效报告与SQLite核对通过，每款两个Run均exited且有endedAt；同Session/native继续并得到新回复。实窗覆盖共享运行页、历史详情与显式继续，不冒充逐款权限卡点击。未知版本/未知授权不猜支持；updatedInput、大输出、专有interruption面真实样本仍未测。原CodeBuddy认证失败仍保留，当前ACP恢复原因未证实，没有强制logout/读取凭据。见[S05当前验收](docs/execution/S05-ACCEPTANCE.md)。本轮未更新安装包。
+
+S06初验（2026-11-03）REWORK_REQUIRED：主管真实扫描10族，Codex官方只读用量与Claude本地转录有观察结果，但转录完整性、缺失数值、RPC错误/429、UI新鲜度/退避存在独立失败，不提升为已验收额度功能。TRAE0.209.1生产PTY版本输出/退出观察通过；第2款扩展族PTY仍NOT_RUN，hostname自定义入口不算第二产品。完整回归386/85/12/4/4通过，新增11反例失败。历史三核心S00–S05结论不变。见[S06验收](docs/execution/S06-ACCEPTANCE.md)。
+
+S06-R1当前覆盖：409领域/88前端/12bootstrap/4fixture/4平台与构建通过，原12反例和主管3新增边界通过。Codex0.166.0官方quota/token读取及实窗来源/窗口/过期提示通过有限样本；Claude2.1.153已启用转录统计只读样本，余额不可读；CodeBuddy等无已证实机器出口仍unsupported。Gemini0.66.0按本轮用户授权隔离安装，真实发现/cmd-PTY version/help/自有Job退出通过，与TRAE0.209.1构成2款扩展；没有聊天/认证/历史/额度推断，其余扩展真机仍NOT_RUN。自定义表单/目标列表及同预设副本真实子进程argv通过。真实429/离线、多bucket及最终安装包仍未测。

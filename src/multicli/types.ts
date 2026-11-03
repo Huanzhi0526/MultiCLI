@@ -506,7 +506,7 @@ export interface ResumeTargetView {
 // ---------------------------------------------------------------------------
 
 export type ShellFlavor = "cmd" | "windows-powershell" | "pwsh";
-export type TerminalTargetKind = "shell" | "installation";
+export type TerminalTargetKind = "shell" | "installation" | "custom-cli";
 export type TerminalLaunchChain = "exe" | "cmd" | "powershell";
 export type TerminalRunState = "starting" | "running" | "stopping" | "exited" | "failed";
 export type TerminalStopMode = "interrupt" | "gentle" | "force";
@@ -516,6 +516,7 @@ export interface TerminalTarget {
   kind: TerminalTargetKind;
   shell?: ShellFlavor | null;
   installationId?: string | null;
+  customCliId?: string | null;
 }
 
 export interface TerminalEnvVar {
@@ -680,6 +681,7 @@ export interface TerminalTargetView {
   agentId: string | null;
   product: string | null;
   installationId: string | null;
+  customCliId: string | null;
   executable: HostPath | null;
   launchChain: TerminalLaunchChain | null;
   status: "ready" | "missing" | "unsupported" | "unverified";
@@ -894,4 +896,183 @@ export interface RuntimeResumeInput {
   cwd?: string;
   prompt?: string;
   permissionTimeoutMs?: number;
+}
+
+
+// ---------------------------------------------------------------------------
+// S06 usage, quota pools and custom CLIs
+// ---------------------------------------------------------------------------
+
+export type UsageStatus =
+  | "ok"
+  | "partial"
+  | "stale"
+  | "unauthenticated"
+  | "unsupported"
+  | "rate-limited"
+  | "error"
+  | "unknown";
+
+export type UsageFreshness = "fresh" | "stale" | "unknown";
+export type UsageIdentityStatus = "confirmed" | "unconfirmed" | "unknown";
+export type UsageSourceKind =
+  | "official-machine"
+  | "local-transcript"
+  | "manual-entry"
+  | "unavailable";
+export type UsageMetric =
+  | "quota-window"
+  | "token-usage"
+  | "credit-balance"
+  | "cost-estimate"
+  | "billing";
+export type UsageUnit = "percent" | "tokens" | "credits" | "usd-micros" | "count";
+export type UsageWindow =
+  | "short"
+  | "daily"
+  | "weekly"
+  | "monthly"
+  | "lifetime"
+  | "session"
+  | "unspecified";
+
+export interface UsageSample {
+  metric: UsageMetric;
+  unit: UsageUnit;
+  window: UsageWindow;
+  label: string;
+  /** A missing number stays `null`; it is never rendered as 0. */
+  usedPercent: number | null;
+  remainingPercent: number | null;
+  amount: number | null;
+  totalTokens: number | null;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  cacheCreationTokens: number | null;
+  outputTokens: number | null;
+  tokenSemantics: "input-includes-cached" | "input-excludes-cached" | null;
+  resetsAt: string | null;
+  windowMinutes: number | null;
+  estimated: boolean;
+  source: string;
+  note: string | null;
+}
+
+export interface UsageSnapshot {
+  id: string;
+  poolId: string;
+  agentId: string;
+  status: UsageStatus;
+  freshness: UsageFreshness;
+  sourceKind: UsageSourceKind;
+  source: string;
+  capturedAt: string;
+  expiresAt: string | null;
+  error: AppError | null;
+  retryAfterMs: number | null;
+  nextAttemptAt: string | null;
+  attempts: number;
+  samples: UsageSample[];
+  note: string | null;
+  unavailableFields: string[];
+}
+
+export interface AccountProfile {
+  id: string;
+  hostId: string;
+  agentId: string;
+  product: string;
+  vendor: string;
+  label: string;
+  identityStatus: UsageIdentityStatus;
+  identityFingerprint: string | null;
+  plan: string | null;
+  source: string;
+  observedAt: string;
+}
+
+export interface QuotaPool {
+  id: string;
+  poolKey: string;
+  hostId: string;
+  agentId: string;
+  product: string;
+  accountProfileId: string | null;
+  identityStatus: UsageIdentityStatus;
+  label: string;
+  installationCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PoolView {
+  pool: QuotaPool;
+  snapshot: UsageSnapshot;
+  lastGood: UsageSnapshot | null;
+  installationIds: string[];
+}
+
+export interface UsageAccountView {
+  account: AccountProfile;
+  pools: PoolView[];
+}
+
+export interface ProviderCatalogEntry {
+  agentId: string;
+  product: string;
+  /** `machine | transcript | manual | none` */
+  quotaAccess: string;
+  tokenAccess: string;
+  officialEntry: string | null;
+  status: string;
+  installed: boolean;
+  evidence: string;
+  limitation: string | null;
+}
+
+export interface UsageOverviewView {
+  schemaVersion: number;
+  generatedAt: string;
+  accounts: UsageAccountView[];
+  unconfirmedPools: PoolView[];
+  catalog: ProviderCatalogEntry[];
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  note: string;
+}
+
+export interface RefreshOutcome {
+  agentId: string;
+  status: UsageStatus;
+  skipped: boolean;
+  reason: string | null;
+  retryAfterMs: number | null;
+}
+
+export interface UsageRefreshResult {
+  overview: UsageOverviewView;
+  outcomes: RefreshOutcome[];
+}
+
+export interface CustomCliInput {
+  label: string;
+  executable: string;
+  args: string[];
+  cwd?: string | null;
+  productHint?: string | null;
+}
+
+export interface CustomCliView {
+  id: string;
+  label: string;
+  executable: HostPath;
+  args: string[];
+  cwd: string | null;
+  productHint: string | null;
+  launchChain: TerminalLaunchChain;
+  /** Always `unsupported`: a user-defined command has no product identity. */
+  historyAccess: string;
+  quotaAccess: string;
+  verification: string;
+  createdAt: string;
 }

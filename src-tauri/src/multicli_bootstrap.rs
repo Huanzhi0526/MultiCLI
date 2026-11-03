@@ -19,6 +19,9 @@ use crate::multicli::runtime::{
     RuntimeAnswerRequest, RuntimeCancelRequest, RuntimeManager, RuntimeNotifyFn, RuntimeReadRequest,
     RuntimeResumeRequest, RuntimeSendRequest, RuntimeStartRequest, RuntimeStopRequest,
 };
+use crate::multicli::usage::{
+    UsageCenter, UsageOverviewView, UsageRefreshRequest, UsageRefreshResult,
+};
 use crate::multicli::terminal::{
     NotifyFn as TerminalNotifyFn, TerminalCloseRequest, TerminalCloseView, TerminalLimits,
     TerminalLimitsUpdate, TerminalListView, TerminalManager, TerminalNotify, TerminalOpenSpec,
@@ -28,9 +31,9 @@ use crate::multicli::terminal::{
     TerminalWriteView,
 };
 use crate::multicli::{
-    AgentListItem, AppError, Capability, CapabilityQuery, DiagnosticsExport, ErrorCode, Host,
-    MultiCliService, Page, PageRequest, SessionDetail, SessionQuery, SessionSummary,
-    WorkspaceListItem,
+    AgentListItem, AppError, Capability, CapabilityQuery, CustomCliInput, CustomCliView,
+    DiagnosticsExport, ErrorCode, Host, MultiCliService, Page, PageRequest, SessionDetail,
+    SessionQuery, SessionSummary, WorkspaceListItem,
 };
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -102,6 +105,7 @@ pub struct MultiCliRuntime {
     history: Mutex<Option<Arc<HistoryEngine>>>,
     terminal: Mutex<Option<Arc<TerminalManager>>>,
     runtime: Mutex<Option<Arc<RuntimeManager>>>,
+    usage: Mutex<Option<Arc<UsageCenter>>>,
     /// Stops the permission sweeper when the application exits. It only ever
     /// expires this application's own requests.
     runtime_sweeper: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
@@ -126,6 +130,7 @@ impl MultiCliRuntime {
             history: Mutex::new(None),
             terminal: Mutex::new(None),
             runtime: Mutex::new(None),
+            usage: Mutex::new(None),
             runtime_sweeper: Mutex::new(None),
             app: Mutex::new(None),
         }
@@ -383,6 +388,24 @@ impl MultiCliRuntime {
         Ok(manager)
     }
 
+    /// Lazily creates the usage centre. It shares the same database and data
+    /// root; the only process it ever starts is its own short-lived
+    /// `codex app-server` read, which it also closes.
+    pub fn usage(&self) -> Result<Arc<UsageCenter>, AppError> {
+        let mut slot = self.usage.lock();
+        if let Some(center) = slot.as_ref() {
+            return Ok(center.clone());
+        }
+        let service = self.service()?;
+        let center = Arc::new(UsageCenter::new(
+            "local-windows",
+            service,
+            self.root.clone(),
+        ));
+        *slot = Some(center.clone());
+        Ok(center)
+    }
+
     /// Ends every owned protocol connection. Called from the application exit
     /// event; external CLI processes are never enumerated.
     pub fn stop_runtime(&self) {
@@ -404,11 +427,81 @@ impl MultiCliRuntime {
     }
 }
 
+fn usage_overview_impl(center: &UsageCenter) -> Result<UsageOverviewView, AppError> {
+    center.overview()
+}
+
+// A usage read can start a CLI and wait for its answer. Running it as an async
+// command keeps that wait off the window's main thread; the UI stays
+// responsive while the numbers are being read.
+#[tauri::command]
+async fn multicli_usage_overview(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<UsageOverviewView, AppError> {
+    let center = runtime.usage()?;
+    usage_overview_impl(&center)
+}
+
+fn usage_refresh_impl(
+    center: &UsageCenter,
+    request: &UsageRefreshRequest,
+) -> Result<UsageRefreshResult, AppError> {
+    center.refresh(request)
+}
+
+#[tauri::command]
+async fn multicli_usage_refresh(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<UsageRefreshResult, AppError> {
+    let request: UsageRefreshRequest = match query {
+        Some(value) => serde_json::from_value(value)
+            .map_err(|error| AppError::invalid_argument("query", error.to_string()))?,
+        None => UsageRefreshRequest {
+            agent_id: None,
+            force: false,
+        },
+    };
+    let center = runtime.usage()?;
+    usage_refresh_impl(&center, &request)
+}
+
+#[tauri::command]
+fn multicli_custom_cli_list(runtime: State<'_, MultiCliRuntime>) -> Result<Vec<CustomCliView>, AppError> {
+    let service = runtime.service()?;
+    service.list_custom_clis("local-windows")
+}
+
+#[tauri::command]
+fn multicli_custom_cli_create(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<CustomCliView, AppError> {
+    let input: CustomCliInput = required_argument(query, "query")?;
+    let service = runtime.service()?;
+    service.create_custom_cli("local-windows", &input)
+}
+
+#[tauri::command]
+fn multicli_custom_cli_delete(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<(), AppError> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct DeleteQuery {
+        id: String,
+    }
+    let query: DeleteQuery = required_argument(query, "query")?;
+    let service = runtime.service()?;
+    service.delete_custom_cli("local-windows", &query.id)
+}
+
 #[tauri::command]
 fn multicli_baseline_info(runtime: State<'_, MultiCliRuntime>) -> Result<BaselineInfo, String> {
     Ok(BaselineInfo {
         product: "MultiCLI",
-        stage: "S05 — structured protocol runtime, permissions and continuation",
+        stage: "S06 — account usage, quota pools and the nine CLI families",
         profile: runtime.profile().to_string(),
         data_root: runtime.root().display().to_string(),
         upstream_commit: "6c46345a727e7c1b57e0dacecb4fe063d88ee8dc",
@@ -1275,7 +1368,7 @@ pub fn run() {
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("MultiCLI — S05")
+            .title("MultiCLI — S06")
             .inner_size(1320.0, 820.0)
             .min_inner_size(960.0, 640.0)
             .data_directory(webview_directory)
@@ -1346,6 +1439,11 @@ pub fn run() {
             multicli_terminal_limits,
             multicli_terminal_update_limits,
             multicli_terminal_quit_check,
+            multicli_usage_overview,
+            multicli_usage_refresh,
+            multicli_custom_cli_list,
+            multicli_custom_cli_create,
+            multicli_custom_cli_delete,
             multicli_runtime_capabilities,
             multicli_runtime_start,
             multicli_runtime_resume,
@@ -1385,6 +1483,79 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn usage_overview_and_a_filtered_refresh_pass_through_ipc() {
+        let root = temp_root("ipc-usage");
+        let app = tauri::test::mock_builder()
+            .manage(MultiCliRuntime::new(root.clone(), "test".into()))
+            .invoke_handler(tauri::generate_handler![
+                multicli_usage_overview,
+                multicli_usage_refresh,
+                multicli_custom_cli_list
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let overview = tauri::test::get_ipc_response(
+            &window,
+            tauri::webview::InvokeRequest {
+                cmd: "multicli_usage_overview".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(json!({})),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .expect("usage overview");
+        let value: serde_json::Value = overview.deserialize().unwrap();
+        assert_eq!(value["schemaVersion"], 1);
+        assert!(value["accounts"].as_array().unwrap().is_empty());
+        assert!(value["unconfirmedPools"].as_array().unwrap().is_empty());
+        // The catalogue always lists every family, so the UI never has to guess
+        // which products exist.
+        assert_eq!(value["catalog"].as_array().unwrap().len(), 10);
+
+        // An unknown agent filter matches no provider: no CLI is started and
+        // the call still returns a well-formed result instead of an error.
+        let refreshed = tauri::test::get_ipc_response(
+            &window,
+            tauri::webview::InvokeRequest {
+                cmd: "multicli_usage_refresh".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(json!({"query":{"agentId":"not-a-product"}})),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .expect("usage refresh");
+        let value: serde_json::Value = refreshed.deserialize().unwrap();
+        assert!(value["outcomes"].as_array().unwrap().is_empty());
+        assert_eq!(value["overview"]["schemaVersion"], 1);
+
+        let custom = tauri::test::get_ipc_response(
+            &window,
+            tauri::webview::InvokeRequest {
+                cmd: "multicli_custom_cli_list".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(json!({})),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .expect("custom cli list");
+        let value: serde_json::Value = custom.deserialize().unwrap();
+        assert!(value.as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn failed_data_roots_keep_webview_profiles_separate() {
         let base = temp_root("fallback-profiles");
         let blocked = base.join("file");
@@ -1415,7 +1586,10 @@ mod tests {
                 multicli_get_session,
                 multicli_list_installations,
                 multicli_list_processes,
-                multicli_update_discovery_settings
+                multicli_update_discovery_settings,
+                multicli_usage_overview,
+                multicli_usage_refresh,
+                multicli_custom_cli_create
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
@@ -1452,6 +1626,18 @@ mod tests {
             (
                 "multicli_update_discovery_settings",
                 json!({"query":{"intervalMs":10}}),
+            ),
+            (
+                "multicli_usage_refresh",
+                json!({"query":{"unexpected":true}}),
+            ),
+            (
+                "multicli_custom_cli_create",
+                json!({"query":{"label":"x"}}),
+            ),
+            (
+                "multicli_custom_cli_create",
+                json!({"query":{"label":"x","executable":"relative.exe","args":[]}}),
             ),
         ] {
             let error = tauri::test::get_ipc_response(

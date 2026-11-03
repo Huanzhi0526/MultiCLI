@@ -27,6 +27,39 @@
 
 设置只改本 profile 自有目录的扫描间隔（1–60 秒），不写任何 CLI 配置、注册表或系统代理。窗口真正退出时结束自有采样线程，不影响外部 CLI。
 
+## MultiCLI S06 派生说明（用量页与自定义 CLI）
+
+顶部新增两个视图页签：**用量**（`src/multicli/usage/UsageView.tsx`）与**自定义 CLI**
+（`src/multicli/custom/CustomCliView.tsx`）。两者都是本机只读/本地配置入口，不联网写账号、
+不注入斜杠命令。
+
+**用量页**分三段：已确认账户（账户行 + 该账户的额度池列表）、未确认身份的额度池、各产品可读取
+来源表。池卡片依次显示池标签、`agentId`、身份徽标（`身份已确认` / `身份未确认（不合并）`）、
+「N 个安装共用此池」、读数状态徽标、新鲜度、采集时间、来源（`codex app-server …`）、失败原因与
+退避提示、`本次未提供字段`、以及指标表（指标 / 已用-剩余 / 窗口 / 重置-明细 / 来源）。
+
+- **未知、过期、未认证、不支持、限流、失败都不显示成 0**：没有数值时明写
+  「本次没有数值：未知、过期或失败都不显示为 0」，不渲染空表格冒充成功。
+- **失败读数与上次成功读数分开**：当前读数不是 `ok`/`partial` 时，把上一次成功的快照折叠在
+  「上次成功读数（时间）」里，展开后才显示旧数字，标题始终带旧快照的时间。
+- **费用估算与账单分开**：`cost-estimate` 必须有「估算」徽标，`billing` 显示「账单」，
+  两者不合并成一个金额。
+- **账户去重可见**：「N 个安装共用此池」直接来自后端池记录的安装列表长度；身份未确认的池
+  永远列在单独一段，不与账户相加。
+- 来源表每行显示产品、额度来源（machine / transcript / none）、token 来源、官方人工入口、
+  状态徽标与限制；未安装的产品标 `未安装`，不显示为已支持。
+- **新鲜度跟着本地时钟走**：页面打开期间每 15 秒按 `capturedAt` / `expiresAt` 重算一次，
+  越过过期点立刻转 amber 并显示「已过期」；系统时钟大幅回拨时记 `unknown`，不继续显示「读数新鲜」。
+  这是纯本地重算，不会自动启动 CLI 或发起后台读取。读数的成功/失败切换只由真实刷新结果决定。
+- **转录类读数不完整时不报数**：本地转录扫描只要漏读（超单文件上限、深度剪枝、含 usage 行解析失败、
+  文件/目录不可读、扫描预算用尽），就显示「部分字段缺失」并列出原因，窗口与累计值显示为「—」，
+  不从漏读子集拼出完整总量；缺失分量同样显示「—」，只有提供方真实报告的 `0` 才显示 `0`。
+
+**自定义 CLI 页**上半是新增表单（显示名 / 可执行文件绝对路径 / 工作目录 / 产品提示 /
+参数数组每行一个），下半是已保存条目。参数按行保存为数组，引号、空格、中文、`&` 原样保留，
+**不解析 shell 语法**；保存失败显示真实 `AppError` 并保留输入。条目行显示入口路径、`argv`、
+工作目录与「历史 / 额度：unsupported / unsupported」，删除只删配置，不停止已在运行的终端。
+
 ## MultiCLI S05 派生说明（结构化运行页）
 
 顶部新增第六个视图页签 **结构化运行**（`data-testid="view-runtime"`，`src/multicli/runtime/RuntimeView.tsx`）。
@@ -429,6 +462,8 @@ const feedback = useRunningFeedback(store.loading);
 | MultiCLI 安装列表刷新 | `src/multicli/discovery/InstallationsView.tsx` | 文字按钮 disabled + 面板自身加载态 | 扫描完成后按新代次重读第一页；失败保留旧行并在面板内显示真实 `AppError` 与重试 |
 | MultiCLI 外部进程自动重读 | `src/multicli/discovery/ProcessesView.tsx` | 无按钮（状态驱动） | 无后续页时按扫描间隔重读第一页；已加载后续页时暂停，避免游标跨代次 |
 | MultiCLI 会话列表刷新 | `src/multicli/components.tsx`（`SessionList`）、`src/multicli/App.tsx` | 文字按钮 disabled + 列表面板自身加载态（不进 §4.1 图标反馈） | 重读当前筛选第一页，并重读已选会话详情与能力；失败保留旧列表并在面板内显示真实 `AppError` 与重试。筛选变化是重置游标的一次重新读取，不走此按钮 |
+| MultiCLI 用量读数刷新 | `src/multicli/usage/UsageView.tsx` | 文字按钮 disabled + 顶部 `usageRefreshing` 文案 | 主按钮与错误重试调用 `multicli_usage_refresh`（`force=false`），**遵守后端退避**；退避期内返回 `skipped` 并逐条列出本次结果。另有一个独立标注「强制刷新（忽略退避）」的文字动作，只有它传 `force=true`。失败保留旧读数并在面板内显示真实 `AppError` 与重试，不显示为 0 |
+| MultiCLI 自定义 CLI 重新读取 | `src/multicli/custom/CustomCliView.tsx` | 文字按钮 disabled + 面板加载态 | 重读 `multicli_custom_cli_list`；新增/删除成功后同样重读，失败保留列表并显示真实 `AppError` |
 | MultiCLI 历史来源刷新 | `src/multicli/history/SourcesPanel.tsx` | 文字按钮 disabled + 来源行状态徽标 | 调用 `multicli_refresh_history`；后端合并在途 pass，不同步无限等待。失败保留旧行与旧计数，行内显示真实 `AppError` 与重试；不把失败显示成“成功 0 条” |
 | MultiCLI 历史重建 | `src/multicli/history/SourcesPanel.tsx` | 两段式确认后按钮 disabled + 状态徽标 | 只清该来源派生索引；确认文案写明保留会话 id、备注与标签。取消不调用后端 |
 | MultiCLI 历史状态轮询 | `src/multicli/history/useHistory.ts` | 无按钮（状态驱动，1.5 s） | 只读 `multicli_get_history_status`；代次变化时才重读来源配置行，避免每次轮询都请求列表。轮询失败不覆盖已有状态，只显示错误 |

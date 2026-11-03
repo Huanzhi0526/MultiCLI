@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 const DB_FILE_NAME: &str = "multicli.db";
 
@@ -589,6 +589,172 @@ DROP TABLE history_file_blocks;
 ALTER TABLE history_file_blocks_v6 RENAME TO history_file_blocks;
 "#;
 
+/// Schema v7 — account profiles, one quota pool per confirmed account, usage
+/// snapshots/samples, provider backoff state and user-defined CLIs.
+///
+/// No existing table is touched: every S01–S05 row keeps its id, and a Run or
+/// Session foreign key still points at the same record. The migration is
+/// additive on purpose, so a rollback only has to drop the new tables (the
+/// store's migration transaction already does that automatically).
+///
+/// Three constraints encode the S06 rules in the database itself rather than
+/// only in Rust:
+///
+/// - `usage_accounts` refuses `confirmed` without a fingerprint;
+/// - `usage_pools.pool_key` is unique, so two sessions of one confirmed
+///   account cannot create two allowance rows;
+/// - `usage_samples` keeps `estimated` explicit and requires a valid percentile
+///   range, so a computed cost can never be stored as a bill.
+const V7_USAGE: &str = r#"
+CREATE TABLE usage_accounts(
+    id TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    product TEXT NOT NULL CHECK(length(trim(product)) > 0),
+    vendor TEXT NOT NULL CHECK(length(trim(vendor)) > 0),
+    label TEXT NOT NULL CHECK(length(trim(label)) > 0),
+    identity_status TEXT NOT NULL CHECK(
+        identity_status IN ('confirmed', 'unconfirmed', 'unknown')
+    ),
+    identity_fingerprint TEXT CHECK(
+        identity_fingerprint IS NULL OR length(trim(identity_fingerprint)) > 0
+    ),
+    plan TEXT CHECK(plan IS NULL OR length(trim(plan)) > 0),
+    source TEXT NOT NULL CHECK(length(trim(source)) > 0),
+    observed_at TEXT NOT NULL CHECK(length(trim(observed_at)) > 0),
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    CHECK(identity_status <> 'confirmed' OR identity_fingerprint IS NOT NULL)
+) STRICT;
+
+CREATE UNIQUE INDEX ux_usage_accounts_identity
+    ON usage_accounts(host_id, agent_id, identity_fingerprint)
+    WHERE identity_fingerprint IS NOT NULL;
+
+CREATE INDEX ix_usage_accounts_agent
+    ON usage_accounts(host_id, agent_id, updated_at_ms DESC);
+
+CREATE TABLE usage_pools(
+    id TEXT PRIMARY KEY,
+    pool_key TEXT NOT NULL CHECK(length(trim(pool_key)) > 0),
+    host_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    product TEXT NOT NULL CHECK(length(trim(product)) > 0),
+    account_profile_id TEXT REFERENCES usage_accounts(id) ON DELETE SET NULL,
+    identity_status TEXT NOT NULL CHECK(
+        identity_status IN ('confirmed', 'unconfirmed', 'unknown')
+    ),
+    label TEXT NOT NULL CHECK(length(trim(label)) > 0),
+    installation_ids_json TEXT NOT NULL CHECK(
+        json_valid(installation_ids_json)
+        AND json_type(installation_ids_json) = 'array'
+    ),
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    CHECK(identity_status <> 'confirmed' OR account_profile_id IS NOT NULL)
+) STRICT;
+
+CREATE UNIQUE INDEX ux_usage_pools_key ON usage_pools(pool_key);
+CREATE INDEX ix_usage_pools_agent ON usage_pools(host_id, agent_id, updated_at_ms DESC);
+
+CREATE TABLE usage_snapshots(
+    id TEXT PRIMARY KEY,
+    pool_id TEXT NOT NULL REFERENCES usage_pools(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(
+        status IN ('ok', 'partial', 'stale', 'unauthenticated', 'unsupported',
+                   'rate-limited', 'error', 'unknown')
+    ),
+    source_kind TEXT NOT NULL CHECK(
+        source_kind IN ('official-machine', 'local-transcript', 'manual-entry', 'unavailable')
+    ),
+    source TEXT NOT NULL CHECK(length(trim(source)) > 0),
+    captured_at TEXT NOT NULL CHECK(length(trim(captured_at)) > 0),
+    expires_at TEXT CHECK(expires_at IS NULL OR length(trim(expires_at)) > 0),
+    error_json TEXT CHECK(error_json IS NULL OR json_valid(error_json)),
+    retry_after_ms INTEGER CHECK(retry_after_ms IS NULL OR retry_after_ms >= 0),
+    next_attempt_at TEXT CHECK(next_attempt_at IS NULL OR length(trim(next_attempt_at)) > 0),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+    note TEXT,
+    unavailable_fields_json TEXT NOT NULL DEFAULT '[]' CHECK(
+        json_valid(unavailable_fields_json)
+        AND json_type(unavailable_fields_json) = 'array'
+    ),
+    created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX ix_usage_snapshots_pool
+    ON usage_snapshots(pool_id, created_at_ms DESC);
+
+CREATE TABLE usage_samples(
+    snapshot_id TEXT NOT NULL REFERENCES usage_snapshots(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    metric TEXT NOT NULL CHECK(
+        metric IN ('quota-window', 'token-usage', 'credit-balance', 'cost-estimate', 'billing')
+    ),
+    unit TEXT NOT NULL CHECK(
+        unit IN ('percent', 'tokens', 'credits', 'usd-micros', 'count')
+    ),
+    window TEXT NOT NULL CHECK(
+        window IN ('short', 'daily', 'weekly', 'monthly', 'lifetime', 'session', 'unspecified')
+    ),
+    label TEXT NOT NULL CHECK(length(trim(label)) > 0),
+    used_percent REAL CHECK(used_percent IS NULL OR (used_percent >= 0 AND used_percent <= 100)),
+    remaining_percent REAL CHECK(
+        remaining_percent IS NULL OR (remaining_percent >= 0 AND remaining_percent <= 100)
+    ),
+    amount REAL,
+    total_tokens INTEGER CHECK(total_tokens IS NULL OR total_tokens >= 0),
+    input_tokens INTEGER CHECK(input_tokens IS NULL OR input_tokens >= 0),
+    cached_input_tokens INTEGER CHECK(cached_input_tokens IS NULL OR cached_input_tokens >= 0),
+    cache_creation_tokens INTEGER CHECK(cache_creation_tokens IS NULL OR cache_creation_tokens >= 0),
+    output_tokens INTEGER CHECK(output_tokens IS NULL OR output_tokens >= 0),
+    token_semantics TEXT CHECK(
+        token_semantics IS NULL
+        OR token_semantics IN ('input-includes-cached', 'input-excludes-cached')
+    ),
+    resets_at TEXT,
+    window_minutes INTEGER CHECK(window_minutes IS NULL OR window_minutes >= 0),
+    estimated INTEGER NOT NULL CHECK(estimated IN (0, 1)),
+    source TEXT NOT NULL CHECK(length(trim(source)) > 0),
+    note TEXT,
+    PRIMARY KEY(snapshot_id, ordinal)
+) STRICT;
+
+CREATE TABLE usage_provider_state(
+    agent_id TEXT PRIMARY KEY,
+    last_attempt_at TEXT,
+    last_success_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+    backoff_until TEXT,
+    last_status TEXT,
+    last_error_json TEXT CHECK(last_error_json IS NULL OR json_valid(last_error_json)),
+    updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+-- User-defined CLIs. `args_json` is an array, never a shell string: the whole
+-- point of the S04 argument chain is that a user argument cannot change the
+-- command structure. The unique key keeps the same executable+argv pair from
+-- being registered twice while still allowing one executable with two presets.
+CREATE TABLE custom_clis(
+    id TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL,
+    label TEXT NOT NULL CHECK(length(trim(label)) > 0),
+    executable_display_path TEXT NOT NULL CHECK(length(trim(executable_display_path)) > 0),
+    executable_canonical_path TEXT NOT NULL CHECK(length(trim(executable_canonical_path)) > 0),
+    args_json TEXT NOT NULL CHECK(
+        json_valid(args_json) AND json_type(args_json) = 'array'
+    ),
+    cwd TEXT CHECK(cwd IS NULL OR length(trim(cwd)) > 0),
+    product_hint TEXT CHECK(product_hint IS NULL OR length(trim(product_hint)) > 0),
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    UNIQUE(host_id, executable_canonical_path, args_json)
+) STRICT;
+
+CREATE INDEX ix_custom_clis_order ON custom_clis(host_id, created_at_ms DESC);
+"#;
+
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -625,6 +791,12 @@ const MIGRATIONS: &[Migration] = &[
         description: "logical and physical content-verification layers per file",
         statements: &[V6_BLOCK_LAYERS],
         requires_foreign_keys_off: true,
+    },
+    Migration {
+        version: 7,
+        description: "account profiles, confirmed-account quota pools, usage snapshots and custom CLIs",
+        statements: &[V7_USAGE],
+        requires_foreign_keys_off: false,
     },
 ];
 

@@ -5,8 +5,24 @@ import type { AppError, DiscoverySettings, ScanStatus, ScanView } from "../types
 
 export const INTERVAL_OPTIONS = [3000, 5000, 10000, 30000];
 
-/** The three product families declared by the S02 signature registry. */
-export const DISCOVERY_AGENTS = ["codex", "claude", "codebuddy"] as const;
+/**
+ * The product families declared by the signature registry: three core (S02/S05),
+ * six extensions and one observed-only family (S06). A family with no positive
+ * sample is not a claim, so this list mirrors the registry instead of being
+ * hand-maintained per stage.
+ */
+export const DISCOVERY_AGENTS = [
+  "codex",
+  "claude",
+  "codebuddy",
+  "gemini",
+  "opencode",
+  "qwen",
+  "copilot",
+  "kimi",
+  "aider",
+  "trae",
+] as const;
 
 const scanTone: Record<ScanStatus, "neutral" | "blue" | "green" | "amber" | "red"> = {
   idle: "neutral",

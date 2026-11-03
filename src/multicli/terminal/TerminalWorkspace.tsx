@@ -573,11 +573,24 @@ function NewTerminalDialog({
       setLocalError(t("terminalErrorEnv", { lines: parsedEnv.invalid.join(", ") }));
       return;
     }
+    const target =
+      selected.kind === "shell"
+        ? { kind: "shell" as const, shell: shellOf(selected.id), installationId: null, customCliId: null }
+        : selected.kind === "custom-cli"
+          ? {
+              kind: "custom-cli" as const,
+              shell: null,
+              installationId: null,
+              customCliId: selected.customCliId,
+            }
+          : {
+              kind: "installation" as const,
+              shell: null,
+              installationId: selected.installationId,
+              customCliId: null,
+            };
     onCreate({
-      target:
-        selected.kind === "shell"
-          ? { kind: "shell", shell: shellOf(selected.id), installationId: null }
-          : { kind: "installation", shell: null, installationId: selected.installationId },
+      target,
       args,
       cwd: cwd.trim(),
       env: parsedEnv.env,

@@ -6,7 +6,8 @@
 - 版本：`RUNTIME_SCHEMA_VERSION = 1`，出现在每个视图的 `schemaVersion`。
 - 线上字段名：camelCase，未知字段一律拒绝（`deny_unknown_fields`）。
 - 唯一 IPC 注册点仍是 `src-tauri/src/multicli_bootstrap.rs`；前端入口 `src/main.tsx → src/multicli/App.tsx`。
-- 本契约不新增数据库表。Run/Session/Process 复用 S01 冻结模型；`schema` 保持 **v6**。
+- 本契约不新增数据库表。Run/Session/Process 复用 S01 冻结模型；S05 验收时库为 **v6**，
+  S06 起整体 schema 为 **v7**（新增 usage/自定义 CLI 表，S05 的 Run 语义不变）。
 
 ## 1. 三款产品的入口与传输
 

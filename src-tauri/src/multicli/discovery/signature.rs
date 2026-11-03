@@ -77,12 +77,51 @@ pub struct ResiduePath {
     pub relative: &'static str,
 }
 
+/// How much this build can honestly claim for a product family.
+///
+/// The three core products were driven end-to-end in S05. An extension product
+/// is installed/process/PTY only: history and quota stay `unsupported` or
+/// `unverified` unless a later stage proves otherwise. An observed-only family
+/// has real local evidence and no published CLI contract, so nothing beyond
+/// "this executable exists and starts" is claimed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProductKind {
+    Core,
+    Extension,
+    ObservedOnly,
+}
+
+impl ProductKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Extension => "extension",
+            Self::ObservedOnly => "observed-only",
+        }
+    }
+
+    /// The sentence shown next to a terminal target of this product.
+    pub fn terminal_note(self) -> &'static str {
+        match self {
+            Self::Core => "三核心：结构化协议、权限与继续已按实测版本验收。",
+            Self::Extension => {
+                "扩展产品：仅提供安装识别、进程识别与 PTY 目标；历史与额度默认 unsupported/unverified。"
+            }
+            Self::ObservedOnly => {
+                "仅本机观测：存在真实可执行文件，但未找到官方 CLI 文档，能力不外推。"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct InstallSignature {
     pub signature_id: &'static str,
     pub agent_id: &'static str,
     pub product: &'static str,
     pub vendor: &'static str,
+    pub kind: ProductKind,
     /// Lower-case executable file names, including the `.exe` suffix.
     pub native_names: &'static [&'static str],
     /// Lower-case shim base names without extension.
@@ -144,9 +183,461 @@ const PATH_ROOT: InstallRoot = InstallRoot {
     relative: "",
 };
 
+/// The six extension families (plus one observed-only family) added in S06.
+///
+/// Every rule here is a *file/name* rule, never a brand word in argv. The npm
+/// `bin` maps below were read from the published package metadata
+/// (`registry.npmjs.org/<pkg>/latest`), not guessed:
+///
+/// | product | package | bin |
+/// |---|---|---|
+/// | Gemini CLI | `@google/gemini-cli` | `gemini` → `bundle/gemini.js` |
+/// | OpenCode | `opencode-ai` | `opencode` → `bin/opencode.exe` |
+/// | Qwen Code | `@qwen-code/qwen-code` | `qwen` → `cli-entry.js` |
+/// | GitHub Copilot CLI | `@github/copilot` | `copilot` → `npm-loader.js` |
+/// | Kimi Code | `@moonshot-ai/kimi-code` | `kimi` → `dist/main.mjs` |
+/// | Aider | `aider-chat` (PyPI) | console script `aider` |
+///
+/// OpenCode ships a **native** executable inside its npm package, so it is
+/// matched by file name inside the package's `bin` directory rather than by a
+/// Node entry script. Aider is a Python console script, so on Windows it is an
+/// `.exe` launcher. Kimi Code shares the command name `kimi` with the older
+/// Python `kimi-cli`; the registry therefore refuses to inherit capability from
+/// an unknown version instead of assuming the new product.
+///
+/// `traex` is **observed only**: it exists on this host and reports
+/// `traecli 0.209.1`, but no official CLI contract was found, so its kind is
+/// `ObservedOnly` and no capability beyond installation/PTY is claimed.
+const EXTENSION_SIGNATURES: &[InstallSignature] = &[
+    InstallSignature {
+        signature_id: GEMINI_SIGNATURE_ID,
+        agent_id: "gemini",
+        product: "Gemini CLI",
+        vendor: "Google",
+        kind: ProductKind::Extension,
+        native_names: &["gemini.exe"],
+        wrapper_names: &["gemini"],
+        node_entry_suffixes: &["node_modules\\@google\\gemini-cli\\bundle\\gemini.js"],
+        install_roots: &[
+            PATH_ROOT,
+            InstallRoot {
+                kind: InstallRootKind::AppData,
+                relative: "npm",
+            },
+        ],
+        residue_paths: &[
+            ResiduePath {
+                kind: InstallRootKind::AppData,
+                relative: "npm\\node_modules\\@google",
+            },
+            ResiduePath {
+                kind: InstallRootKind::AppData,
+                relative: "npm\\node_modules\\@google\\gemini-cli",
+            },
+        ],
+        known_flags: &[
+            "--version",
+            "-v",
+            "--help",
+            "-h",
+            "--model",
+            "-m",
+            "--prompt",
+            "-p",
+            "--prompt-interactive",
+            "-i",
+            "--yolo",
+            "--approval-mode",
+            "--sandbox",
+            "--debug",
+            "--include-directories",
+            "--output-format",
+            "--extensions",
+            "--list-extensions",
+        ],
+        cwd_flags: &[],
+        version_markers: &[],
+        version_args: &["--version"],
+        source: "npm @google/gemini-cli 0.66.0 metadata: bin {\"gemini\":\"bundle/gemini.js\"}; \
+                 official commands reference documents --model/--prompt/--sandbox/--yolo/\
+                 --approval-mode/--include-directories. Windows path is the npm global prefix; \
+                 the npm shims are parsed as data, never executed.",
+        positive_samples: &[
+            r"node C:\Users\me\AppData\Roaming\npm\node_modules\@google\gemini-cli\bundle\gemini.js --version",
+            r"node C:\Users\me\AppData\Roaming\npm\node_modules\@google\gemini-cli\bundle\gemini.js --prompt hello",
+        ],
+        negative_samples: &[
+            r"node -e console.log('gemini --help')",
+            r"python C:\Users\me\scripts\gemini_helper.py",
+            r"C:\Users\me\Downloads\gemini.exe --version",
+            r"node C:\Users\me\node_modules\@google\gemini-cli-core\bundle\gemini.js --version",
+        ],
+    },
+    InstallSignature {
+        signature_id: OPENCODE_SIGNATURE_ID,
+        agent_id: "opencode",
+        product: "OpenCode",
+        vendor: "SST",
+        kind: ProductKind::Extension,
+        native_names: &["opencode.exe"],
+        wrapper_names: &["opencode"],
+        // The bin map points at a native image, not a Node script.
+        node_entry_suffixes: &[],
+        install_roots: &[
+            PATH_ROOT,
+            InstallRoot {
+                kind: InstallRootKind::AppData,
+                relative: "npm",
+            },
+            InstallRoot {
+                kind: InstallRootKind::AppData,
+                relative: "npm\\node_modules\\opencode-ai\\bin",
+            },
+        ],
+        residue_paths: &[
+            ResiduePath {
+                kind: InstallRootKind::AppData,
+                relative: "npm\\node_modules\\opencode-ai",
+            },
+        ],
+        known_flags: &[
+            "--version",
+            "-v",
+            "--help",
+            "-h",
+            "--model",
+            "-m",
+            "--prompt",
+            "--continue",
+            "-c",
+            "--session",
+            "-s",
+            "--agent",
+            "--print-logs",
+            "--log-level",
+        ],
+        cwd_flags: &[],
+        version_markers: &[],
+        version_args: &["--version"],
+        source: "npm opencode-ai 1.19.5 metadata: bin {\"opencode\":\"bin/opencode.exe\"}, \
+                 os includes win32. The package ships a native Windows image, so the npm shim \
+                 forwards to an .exe and the Node entry matcher deliberately stays empty.",
+        positive_samples: &[
+            r"C:\Users\me\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe --version",
+            r"C:\Users\me\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe --model x",
+        ],
+        negative_samples: &[
+            r"C:\Users\me\.vscode\extensions\sst.opencode\bin\opencode.exe --version",
+            r"C:\Users\me\Downloads\opencode.exe --version",
+            r"node C:\Users\me\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe",
+            r"cmd.exe /c opencode --version",
+        ],
+    },
+    InstallSignature {
+        signature_id: QWEN_SIGNATURE_ID,
+        agent_id: "qwen",
+        product: "Qwen Code",
+        vendor: "Alibaba",
+        kind: ProductKind::Extension,
+        native_names: &["qwen.exe"],
+        wrapper_names: &["qwen"],
+        node_entry_suffixes: &["node_modules\\@qwen-code\\qwen-code\\cli-entry.js"],
+        install_roots: &[
+            PATH_ROOT,
+            InstallRoot {
+                kind: InstallRootKind::AppData,
+                relative: "npm",
+            },
+        ],
+        residue_paths: &[
+            ResiduePath {
+                kind: InstallRootKind::AppData,
+                relative: "npm\\node_modules\\@qwen-code",
+            },
+            ResiduePath {
+                kind: InstallRootKind::AppData,
+                relative: "npm\\node_modules\\@qwen-code\\qwen-code",
+            },
+        ],
+        known_flags: &[
+            "--version",
+            "-v",
+            "--help",
+            "-h",
+            "--model",
+            "-m",
+            "--prompt",
+            "-p",
+            "--prompt-interactive",
+            "-i",
+            "--yolo",
+            "--approval-mode",
+            "--sandbox",
+            "--debug",
+            "--all-files",
+            "--include-directories",
+            "--output-format",
+        ],
+        cwd_flags: &[],
+        version_markers: &[],
+        version_args: &["--version"],
+        source: "npm @qwen-code/qwen-code 0.26.6 metadata: bin {\"qwen\":\"cli-entry.js\"}. \
+                 The upstream quickstart documents the Windows npm route; the entry suffix is the \
+                 published package layout, not an observed local install.",
+        positive_samples: &[
+            r"node C:\Users\me\AppData\Roaming\npm\node_modules\@qwen-code\qwen-code\cli-entry.js --version",
+            r"node C:\Users\me\AppData\Roaming\npm\node_modules\@qwen-code\qwen-code\cli-entry.js -p hello",
+        ],
+        negative_samples: &[
+            r"node C:\Users\me\scripts\qwen.js --version",
+            r"python C:\Users\me\scripts\qwen.py",
+            r"C:\Users\me\Downloads\qwen.exe --version",
+            r"node C:\Users\me\node_modules\@qwen-code\qwen-helper\cli-entry.js",
+        ],
+    },
+    InstallSignature {
+        signature_id: COPILOT_SIGNATURE_ID,
+        agent_id: "copilot",
+        product: "GitHub Copilot CLI",
+        vendor: "GitHub",
+        kind: ProductKind::Extension,
+        native_names: &["copilot.exe"],
+        wrapper_names: &["copilot"],
+        node_entry_suffixes: &["node_modules\\@github\\copilot\\npm-loader.js"],
+        install_roots: &[
+            PATH_ROOT,
+            InstallRoot {
+                kind: InstallRootKind::AppData,
+                relative: "npm",
+            },
+            InstallRoot {
+                kind: InstallRootKind::LocalAppData,
+                relative: "Programs\\GitHub\\Copilot",
+            },
+        ],
+        residue_paths: &[
+            ResiduePath {
+                kind: InstallRootKind::AppData,
+                relative: "npm\\node_modules\\@github\\copilot",
+            },
+        ],
+        known_flags: &[
+            "--version",
+            "-v",
+            "--help",
+            "-h",
+            "--model",
+            "--allow-all-tools",
+            "--allow-tool",
+            "--deny-tool",
+            "--allow-all-paths",
+            "--add-dir",
+            "--resume",
+            "--continue",
+            "--prompt",
+            "-p",
+            "--banner",
+            "--no-color",
+            "--log-level",
+        ],
+        cwd_flags: &["--add-dir"],
+        version_markers: &[],
+        version_args: &["--version"],
+        source: "GitHub Docs \"Installing GitHub Copilot CLI\": npm install -g @github/copilot, \
+                 winget install GitHub.Copilot, Windows needs PowerShell 6+. The VS Code \
+                 `bin/copilot-shim/copilot.exe` is *not* the product: on this host it prints \
+                 \"GitHub Copilot CLI was not found\" and is reported as an unverified PATH hit, \
+                 never as an installation.",
+        positive_samples: &[
+            r"node C:\Users\me\AppData\Roaming\npm\node_modules\@github\copilot\npm-loader.js --version",
+            r"node C:\Users\me\AppData\Roaming\npm\node_modules\@github\copilot\npm-loader.js -p hi",
+            r"C:\Users\me\AppData\Local\Programs\GitHub\Copilot\copilot.exe --version",
+        ],
+        negative_samples: &[
+            r"C:\Users\me\AppData\Local\Programs\Microsoft VS Code\bin\copilot-shim\copilot.exe --version",
+            r"C:\Users\me\Downloads\copilot.exe --version",
+            r"gh copilot suggest",
+            r"node C:\Users\me\scripts\copilot.js",
+        ],
+    },
+    InstallSignature {
+        signature_id: KIMI_SIGNATURE_ID,
+        agent_id: "kimi",
+        product: "Kimi Code",
+        vendor: "Moonshot AI",
+        kind: ProductKind::Extension,
+        native_names: &["kimi.exe"],
+        wrapper_names: &["kimi"],
+        node_entry_suffixes: &["node_modules\\@moonshot-ai\\kimi-code\\dist\\main.mjs"],
+        install_roots: &[
+            PATH_ROOT,
+            InstallRoot {
+                kind: InstallRootKind::AppData,
+                relative: "npm",
+            },
+            InstallRoot {
+                kind: InstallRootKind::UserProfile,
+                relative: ".local\\bin",
+            },
+        ],
+        residue_paths: &[
+            ResiduePath {
+                kind: InstallRootKind::AppData,
+                relative: "npm\\node_modules\\@moonshot-ai",
+            },
+            ResiduePath {
+                kind: InstallRootKind::AppData,
+                relative: "npm\\node_modules\\@moonshot-ai\\kimi-code",
+            },
+        ],
+        known_flags: &[
+            "--version",
+            "-v",
+            "--help",
+            "-h",
+            "--model",
+            "-m",
+            "--prompt",
+            "-p",
+            "--resume",
+            "--continue",
+            "--yolo",
+            "--plan",
+            "--work-dir",
+        ],
+        cwd_flags: &["--work-dir"],
+        version_markers: &[],
+        version_args: &["--version"],
+        source: "npm @moonshot-ai/kimi-code 2.4.1 metadata: bin {\"kimi\":\"dist/main.mjs\"}. \
+                 The older Python `kimi-cli` uses the same `kimi` command on Windows \
+                 (%USERPROFILE%\\.local\\bin\\kimi.exe); the signature therefore never upgrades an \
+                 unknown version to the new product, and compatibility stays unverified.",
+        positive_samples: &[
+            r"node C:\Users\me\AppData\Roaming\npm\node_modules\@moonshot-ai\kimi-code\dist\main.mjs --version",
+            r"node C:\Users\me\AppData\Roaming\npm\node_modules\@moonshot-ai\kimi-code\dist\main.mjs -p hi",
+        ],
+        negative_samples: &[
+            r"node C:\Users\me\scripts\kimi.js --version",
+            r"python C:\Users\me\scripts\kimi.py",
+            r"C:\Users\me\Downloads\kimi.exe --version",
+            r"node C:\Users\me\node_modules\@moonshot-ai\kimi-cli\dist\main.mjs",
+        ],
+    },
+    InstallSignature {
+        signature_id: AIDER_SIGNATURE_ID,
+        agent_id: "aider",
+        product: "Aider",
+        vendor: "Aider-AI",
+        kind: ProductKind::Extension,
+        native_names: &["aider.exe"],
+        wrapper_names: &["aider"],
+        // A console script is an .exe launcher, not a Node entry.
+        node_entry_suffixes: &[],
+        install_roots: &[
+            PATH_ROOT,
+            InstallRoot {
+                kind: InstallRootKind::UserProfile,
+                relative: ".local\\bin",
+            },
+        ],
+        residue_paths: &[
+            ResiduePath {
+                kind: InstallRootKind::UserProfile,
+                relative: ".local\\share\\uv\\tools\\aider-chat",
+            },
+        ],
+        known_flags: &[
+            "--version",
+            "--help",
+            "-h",
+            "--model",
+            "--editor-model",
+            "--weak-model",
+            "--api-key",
+            "--read",
+            "--file",
+            "--message",
+            "-m",
+            "--yes",
+            "--no-auto-commits",
+            "--config",
+            "--no-git",
+            "--lint",
+            "--test",
+            "--architect",
+        ],
+        cwd_flags: &[],
+        version_markers: &["aider"],
+        version_args: &["--version"],
+        source: "aider.chat/docs/install.html documents the Windows PowerShell installer, uv tool \
+                 install and pipx install of `aider-chat`, all of which place an `aider` console \
+                 script in %USERPROFILE%\\.local\\bin. The documented `python -m aider` fallback \
+                 carries no product name in argv and is therefore not recognised, on purpose.",
+        positive_samples: &[
+            r"C:\Users\me\.local\bin\aider.exe --version",
+            r"C:\Users\me\.local\bin\aider.exe --model sonnet",
+        ],
+        negative_samples: &[
+            r"C:\Users\me\Downloads\aider.exe --version",
+            r"python C:\Users\me\scripts\aider_helper.py",
+            r"python -m aider --version",
+            r"node C:\Users\me\scripts\aider.js",
+        ],
+    },
+    InstallSignature {
+        signature_id: TRAE_SIGNATURE_ID,
+        agent_id: "trae",
+        product: "TRAE CLI",
+        vendor: "Trae",
+        kind: ProductKind::ObservedOnly,
+        native_names: &["traex.exe"],
+        wrapper_names: &["traex", "traecli", "trae-cli", "trae-agent"],
+        node_entry_suffixes: &[],
+        install_roots: &[
+            PATH_ROOT,
+            InstallRoot {
+                kind: InstallRootKind::LocalAppData,
+                relative: "Programs\\TraeCLI\\bin",
+            },
+        ],
+        residue_paths: &[
+            ResiduePath {
+                kind: InstallRootKind::LocalAppData,
+                relative: "Programs\\TraeCLI",
+            },
+        ],
+        known_flags: &["--version", "-v", "--help", "-h", "--acp", "--app-server"],
+        cwd_flags: &[],
+        version_markers: &["traecli"],
+        version_args: &["--version"],
+        source: "Observed on this host only: %LOCALAPPDATA%\\Programs\\TraeCLI\\bin\\traex.exe \
+                 reports `traecli 0.209.1` / `installation: public`; `--help` advertises \
+                 acp/app-server. No official CLI documentation was found, so only \
+                 installation/process/PTY are claimed. `Trae CN\\bin\\trae-cn.cmd` is the IDE \
+                 launcher, not this CLI, and is a negative sample.",
+        positive_samples: &[
+            r"C:\Users\me\AppData\Local\Programs\TraeCLI\bin\traex.exe --version",
+            r"C:\Users\me\AppData\Local\Programs\TraeCLI\bin\traex.exe --help",
+        ],
+        negative_samples: &[
+            r"C:\Users\me\AppData\Local\Programs\Trae CN\Trae CN.exe --version",
+            r"C:\Users\me\Downloads\traex.exe --version",
+            r"cmd.exe /c traex --version",
+            r"node C:\Users\me\scripts\trae.js",
+        ],
+    },
+];
+
 pub const CODEX_SIGNATURE_ID: &str = "codex-cli";
 pub const CLAUDE_SIGNATURE_ID: &str = "claude-code";
 pub const CODEBUDDY_SIGNATURE_ID: &str = "codebuddy-code";
+pub const GEMINI_SIGNATURE_ID: &str = "gemini-cli";
+pub const OPENCODE_SIGNATURE_ID: &str = "opencode-cli";
+pub const QWEN_SIGNATURE_ID: &str = "qwen-code";
+pub const COPILOT_SIGNATURE_ID: &str = "copilot-cli";
+pub const KIMI_SIGNATURE_ID: &str = "kimi-code";
+pub const AIDER_SIGNATURE_ID: &str = "aider-cli";
+pub const TRAE_SIGNATURE_ID: &str = "trae-cli";
 
 impl SignatureRegistry {
     /// The three product families in scope for S02.
@@ -157,6 +648,7 @@ impl SignatureRegistry {
                 agent_id: "codex",
                 product: "Codex CLI",
                 vendor: "OpenAI",
+                kind: ProductKind::Core,
                 native_names: &["codex.exe"],
                 wrapper_names: &["codex"],
                 node_entry_suffixes: &["node_modules\\@openai\\codex\\bin\\codex.js"],
@@ -232,6 +724,7 @@ impl SignatureRegistry {
                 agent_id: "claude",
                 product: "Claude Code",
                 vendor: "Anthropic",
+                kind: ProductKind::Core,
                 native_names: &["claude.exe"],
                 wrapper_names: &["claude"],
                 node_entry_suffixes: &["node_modules\\@anthropic-ai\\claude-code\\cli.js"],
@@ -299,6 +792,7 @@ impl SignatureRegistry {
                 agent_id: "codebuddy",
                 product: "CodeBuddy Code",
                 vendor: "Tencent",
+                kind: ProductKind::Core,
                 native_names: &["codebuddy.exe"],
                 wrapper_names: &["codebuddy", "cbc"],
                 node_entry_suffixes: &[
@@ -363,7 +857,9 @@ impl SignatureRegistry {
                 ],
             },
         ];
-        Self { signatures }
+        let mut registry = Self { signatures };
+        registry.signatures.extend_from_slice(EXTENSION_SIGNATURES);
+        registry
     }
 
     /// Registry with a single synthetic signature, for tests that need a
@@ -805,10 +1301,45 @@ mod tests {
             failures.is_empty(),
             "signature samples drifted: {failures:#?}"
         );
-        // Four signatures' worth of coverage is not the claim: only the three
-        // in-scope products are declared.
-        assert_eq!(registry.all().len(), 3);
-        assert_eq!(outcomes.len(), (3 + 5) + (2 + 3) + (2 + 3));
+        // Ten families: three core (S02/S05), six extensions and one
+        // observed-only family (S06). A new family without samples would be an
+        // unproven claim, so each one must declare both directions.
+        assert_eq!(registry.all().len(), 10);
+        let declared: usize = registry
+            .all()
+            .iter()
+            .map(|signature| {
+                assert!(
+                    signature.positive_samples.len() >= 2,
+                    "{} needs at least two positive samples",
+                    signature.signature_id
+                );
+                assert!(
+                    signature.negative_samples.len() >= 3,
+                    "{} needs at least three negative samples",
+                    signature.signature_id
+                );
+                signature.positive_samples.len() + signature.negative_samples.len()
+            })
+            .sum();
+        assert_eq!(outcomes.len(), declared, "every declared sample is evaluated");
+        assert_eq!(
+            SignatureRegistry::standard()
+                .all()
+                .iter()
+                .filter(|signature| signature.kind == ProductKind::Core)
+                .count(),
+            3,
+            "exactly three families carry core claims"
+        );
+        assert_eq!(
+            SignatureRegistry::standard()
+                .all()
+                .iter()
+                .filter(|signature| signature.kind == ProductKind::Extension)
+                .count(),
+            6
+        );
         assert_eq!(SIGNATURE_SCHEMA_VERSION, 1);
     }
 

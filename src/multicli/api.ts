@@ -8,6 +8,8 @@ import type {
   AgentListItem,
   Capability,
   CapabilityQuery,
+  CustomCliInput,
+  CustomCliView,
   DiagnosticsExport,
   DiscoverySettings,
   HistoryCandidateView,
@@ -39,6 +41,8 @@ import type {
   SessionQuery,
   SessionSummary,
   TerminalCloseView,
+  UsageOverviewView,
+  UsageRefreshResult,
   TerminalLimits,
   TerminalListView,
   TerminalOpenSpec,
@@ -110,6 +114,12 @@ export interface MultiCliApi {
   runtimeGet(runId: string): Promise<RuntimeRunView>;
   runtimeRead(query: RuntimeReadQuery): Promise<RuntimeEventPage>;
   runtimeList(): Promise<RuntimeListView>;
+  // S06 usage centre and custom CLIs
+  usageOverview(): Promise<UsageOverviewView>;
+  usageRefresh(agentId?: string | null, force?: boolean): Promise<UsageRefreshResult>;
+  customCliList(): Promise<CustomCliView[]>;
+  customCliCreate(input: CustomCliInput): Promise<CustomCliView>;
+  customCliDelete(id: string): Promise<void>;
 }
 
 function pageArgs(query: PageQuery): Record<string, unknown> {
@@ -331,6 +341,27 @@ export function createMultiCliApi(invokeFn: InvokeFn): MultiCliApi {
         },
       }),
     runtimeList: () => invokeFn<RuntimeListView>("multicli_runtime_list"),
+    usageOverview: () => invokeFn<UsageOverviewView>("multicli_usage_overview"),
+    usageRefresh: (agentId, force) =>
+      invokeFn<UsageRefreshResult>("multicli_usage_refresh", {
+        query: {
+          ...(agentId ? { agentId } : {}),
+          ...(force ? { force: true } : {}),
+        },
+      }),
+    customCliList: () => invokeFn<CustomCliView[]>("multicli_custom_cli_list"),
+    customCliCreate: (input) =>
+      invokeFn<CustomCliView>("multicli_custom_cli_create", {
+        query: {
+          label: input.label,
+          executable: input.executable,
+          args: input.args,
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+          ...(input.productHint ? { productHint: input.productHint } : {}),
+        },
+      }),
+    customCliDelete: (id) =>
+      invokeFn<void>("multicli_custom_cli_delete", { query: { id } }),
   };
 }
 

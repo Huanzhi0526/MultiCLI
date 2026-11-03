@@ -13,7 +13,8 @@ use super::domain::{
     Session, SessionDetail, SessionQuery, SessionRelation, SessionSummary, SessionWorkspace,
     Workspace, WorkspaceListItem,
 };
-use super::error::AppError;
+use super::custom::{CustomCliInput, CustomCliView};
+use super::error::{AppError, ErrorCode};
 use super::path::{self, ResolvedWorkspacePath};
 use super::repo;
 use super::store::{now_ms, MigrationReport, MultiCliStore};
@@ -313,6 +314,89 @@ impl MultiCliService {
         }
         let conn = self.store.connection().lock();
         repo::installation_by_id(&conn, host_id, installation_id)
+    }
+
+    // -----------------------------------------------------------------------
+    // User-defined CLIs (S06)
+    // -----------------------------------------------------------------------
+
+    /// Stores a validated `executable + argv[] + cwd` preset. The executable is
+    /// resolved to a canonical path once; the launch chain is chosen from that
+    /// path and re-checked at launch, so a replaced binary is never started
+    /// under a stale identity without a fresh read.
+    pub fn create_custom_cli(
+        &self,
+        host_id: &str,
+        input: &CustomCliInput,
+    ) -> Result<CustomCliView, AppError> {
+        if host_id.trim().is_empty() {
+            return Err(AppError::invalid_argument("hostId", "must not be empty"));
+        }
+        let resolved = super::custom::validate_input(input)?;
+        let row = super::usage::repo::CustomCliRow {
+            id: resolved.id.clone(),
+            host_id: host_id.to_string(),
+            label: resolved.label.clone(),
+            executable_display_path: resolved.executable_display.clone(),
+            executable_canonical_path: resolved.executable_canonical.clone(),
+            args: resolved.args.clone(),
+            cwd: resolved.cwd.clone(),
+            product_hint: resolved.product_hint.clone(),
+            created_at: super::usage::model::now_iso8601(),
+        };
+        let conn = self.store.connection().lock();
+        let stored = super::usage::repo::insert_custom_cli(&conn, &row)?;
+        drop(conn);
+        super::custom::view(&stored)
+    }
+
+    pub fn list_custom_clis(&self, host_id: &str) -> Result<Vec<CustomCliView>, AppError> {
+        if host_id.trim().is_empty() {
+            return Err(AppError::invalid_argument("hostId", "must not be empty"));
+        }
+        let conn = self.store.connection().lock();
+        let rows = super::usage::repo::all_custom_clis(&conn, host_id)?;
+        drop(conn);
+        rows.iter().map(super::custom::view).collect()
+    }
+
+    pub fn custom_cli(
+        &self,
+        host_id: &str,
+        id: &str,
+    ) -> Result<Option<super::usage::repo::CustomCliRow>, AppError> {
+        if host_id.trim().is_empty() {
+            return Err(AppError::invalid_argument("hostId", "must not be empty"));
+        }
+        if id.trim().is_empty() {
+            return Err(AppError::invalid_argument("customCliId", "must not be empty"));
+        }
+        let conn = self.store.connection().lock();
+        let row = super::usage::repo::custom_cli_by_id(&conn, id)?;
+        Ok(row.filter(|row| row.host_id == host_id))
+    }
+
+    /// Removes the preset only. A terminal already started from it keeps
+    /// running under its own Run: deleting a configuration must never kill a
+    /// process the user did not ask to stop.
+    pub fn delete_custom_cli(&self, host_id: &str, id: &str) -> Result<(), AppError> {
+        if host_id.trim().is_empty() {
+            return Err(AppError::invalid_argument("hostId", "must not be empty"));
+        }
+        let existing = self.custom_cli(host_id, id)?;
+        if existing.is_none() {
+            return Err(AppError::not_found("customCli", id));
+        }
+        let conn = self.store.connection().lock();
+        let removed = super::usage::repo::delete_custom_cli(&conn, id)?;
+        drop(conn);
+        if !removed {
+            return Err(AppError::new(
+                ErrorCode::Conflict,
+                "the custom CLI disappeared before it could be removed",
+            ));
+        }
+        Ok(())
     }
 
     pub fn record_message(&self, message: &Message) -> Result<Message, AppError> {

@@ -146,11 +146,22 @@ pub struct PinnedTarget {
     /// with a fixed launcher argv instead of the target's own argv.
     pub shell_flavor: Option<ShellFlavor>,
     pub version: Option<String>,
+    /// A custom CLI's preset argv. It is placed *before* the user's arguments
+    /// and goes through the same escaping as any other token, so a preset can
+    /// never change the command structure.
+    pub preset_args: Vec<String>,
 }
 
 impl PinnedTarget {
     pub fn host_path(&self, host_id: &str) -> HostPath {
         host_path(host_id, &self.executable)
+    }
+
+    /// The exact argv this target runs: preset first, then the user's tokens.
+    pub fn effective_args(&self, user_args: &[String]) -> Vec<String> {
+        let mut args = self.preset_args.clone();
+        args.extend(user_args.iter().cloned());
+        args
     }
 }
 
@@ -616,6 +627,7 @@ mod tests {
             chain: LaunchChain::Exe,
             shell_flavor: None,
             version: None,
+            preset_args: Vec::new(),
         };
         let root = std::env::temp_dir().join(format!("multicli-launch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
@@ -643,6 +655,7 @@ mod tests {
             chain: LaunchChain::Exe,
             shell_flavor: None,
             version: None,
+            preset_args: Vec::new(),
         };
         let paths = LaunchPaths {
             root: std::env::temp_dir(),

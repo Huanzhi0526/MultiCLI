@@ -11,6 +11,8 @@ import ProcessesView from "./discovery/ProcessesView";
 import HistoryView from "./history/HistoryView";
 import TerminalWorkspace from "./terminal/TerminalWorkspace";
 import RuntimeView from "./runtime/RuntimeView";
+import UsageView from "./usage/UsageView";
+import CustomCliView from "./custom/CustomCliView";
 import type { AppError, DiagnosticsExport, TerminalQuitCheckView } from "./types";
 import { toAppError } from "./navigation";
 
@@ -20,7 +22,9 @@ export type AppView =
   | "installations"
   | "processes"
   | "terminal"
-  | "runtime";
+  | "runtime"
+  | "usage"
+  | "custom";
 
 interface ExportState {
   status: "idle" | "pending" | "done" | "error";
@@ -35,6 +39,8 @@ const VIEWS: { id: AppView; label: string; testId: string }[] = [
   { id: "processes", label: "navProcesses", testId: "view-processes" },
   { id: "terminal", label: "navTerminal", testId: "view-terminal" },
   { id: "runtime", label: "navRuntime", testId: "view-runtime" },
+  { id: "usage", label: "navUsage", testId: "view-usage" },
+  { id: "custom", label: "navCustomCli", testId: "view-custom-cli" },
 ];
 
 const QUIT_REQUESTED_EVENT = "multicli://quit-requested";
@@ -131,7 +137,7 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
           <p className="text-[11px] text-text-tertiary">{t("stage")}</p>
         </div>
         <nav
-          className="flex gap-1 rounded-lg bg-background-secondary-default p-1"
+          className="flex flex-wrap gap-1 rounded-lg bg-background-secondary-default p-1"
           role="tablist"
           aria-label={t("navLabel")}
         >
@@ -220,6 +226,8 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
       >
         <RuntimeView api={api} visible={view === "runtime"} resumeRequest={resumeRequest} onResumeRequestHandled={handledResumeRequest} />
       </div>
+      {view === "usage" ? <UsageView api={api} /> : null}
+      {view === "custom" ? <CustomCliView api={api} /> : null}
 
       {quit ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6">

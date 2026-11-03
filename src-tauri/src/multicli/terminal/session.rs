@@ -1058,7 +1058,7 @@ mod finalization_tests {
             kind: TerminalTargetKind::Shell, label: "synthetic finalization race".into(),
             product: None, agent_id: "synthetic".into(), installation_id: None,
             executable: shell_path(ShellFlavor::Cmd).unwrap(), chain: LaunchChain::Exe,
-            shell_flavor: Some(ShellFlavor::Cmd), version: None,
+            shell_flavor: Some(ShellFlavor::Cmd), version: None, preset_args: Vec::new(),
         };
         let paths = LaunchPaths::resolve(&root).unwrap();
         let plan = plan_launch(&target, &[], "race", &paths).unwrap();

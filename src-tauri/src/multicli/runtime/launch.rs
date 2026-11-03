@@ -67,6 +67,7 @@ pub fn plan(
         chain: request.chain,
         shell_flavor: None,
         version: None,
+        preset_args: Vec::new(),
     };
     let args = product_args(
         request.product,

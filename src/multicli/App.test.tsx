@@ -11,6 +11,7 @@ import type {
   Capability,
   CapabilityName,
   CapabilityQuery,
+  CustomCliView,
   DiagnosticsExport,
   DiscoverySettings,
   HistoryCandidateView,
@@ -50,6 +51,8 @@ import type {
   TerminalTargetsView,
   TerminalView,
   TerminalWriteView,
+  UsageOverviewView,
+  UsageRefreshResult,
   WorkspaceListItem,
 } from "./types";
 
@@ -790,6 +793,40 @@ class FakeApi implements MultiCliApi {
       maxRuns: 8,
       note: "",
     });
+  }
+
+  usageOverview(): Promise<UsageOverviewView> {
+    return Promise.resolve({
+      schemaVersion: 1,
+      generatedAt: "2026-11-03T10:00:00.000Z",
+      accounts: [],
+      unconfirmedPools: [],
+      catalog: [],
+      lastAttemptAt: null,
+      lastSuccessAt: null,
+      note: "",
+    });
+  }
+
+  usageRefresh(): Promise<UsageRefreshResult> {
+    return this.usageOverview().then((overview) => ({ overview, outcomes: [] }));
+  }
+
+  customCliList(): Promise<CustomCliView[]> {
+    return Promise.resolve([]);
+  }
+
+  customCliCreate(): Promise<CustomCliView> {
+    return Promise.reject({
+      code: "unsupported",
+      message: "not used in this suite",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  customCliDelete(): Promise<void> {
+    return Promise.resolve();
   }
 
   listWorkspaces(): Promise<Page<WorkspaceListItem>> {

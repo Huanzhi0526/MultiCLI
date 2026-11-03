@@ -11,6 +11,7 @@ pub mod domain;
 pub mod error;
 pub mod history;
 pub mod path;
+pub mod runtime;
 pub mod terminal;
 mod repo;
 mod service;

@@ -392,6 +392,55 @@ pub(crate) fn ensure_session(
     Ok(stored)
 }
 
+/// S05: records the native conversation id once the protocol handshake has
+/// produced one. A managed Session is created before its CLI has spoken, so the
+/// id arrives later; writing it is the only mutation allowed on a managed row
+/// and it never changes the row's identity (agent/host/namespace stay fixed).
+pub(crate) fn set_session_native_id(
+    conn: &Connection,
+    session_id: &str,
+    native_id: &str,
+) -> Result<(), AppError> {
+    if native_id.trim().is_empty() {
+        return Err(AppError::invalid_argument("nativeId", "must not be empty"));
+    }
+    let existing = read_session(conn, session_id)?
+        .ok_or_else(|| AppError::not_found("session", session_id))?;
+    if let Some(current) = existing.native_id.as_deref() {
+        if current == native_id {
+            return Ok(());
+        }
+        return Err(AppError::conflict(
+            "session",
+            "this session already carries a different native id",
+        )
+        .with_details(serde_json::json!({
+            "sessionId": session_id,
+            "hasNativeId": true,
+            "incomingNativeId": native_id,
+        })));
+    }
+    if let Some(other) =
+        read_session_by_native(conn, &existing.source_namespace, native_id)?
+    {
+        if other.id != existing.id {
+            return Err(AppError::conflict(
+                "session",
+                "this native id already belongs to another session in the same namespace",
+            )
+            .with_details(serde_json::json!({
+                "sessionId": session_id,
+                "otherSessionId": other.id,
+            })));
+        }
+    }
+    conn.execute(
+        "UPDATE sessions SET native_id = ?2 WHERE id = ?1",
+        rusqlite::params![session_id, native_id],
+    )?;
+    Ok(())
+}
+
 /// Transaction-aware variant. History import must commit its messages, FTS
 /// rows, provenance and file cursor together, so it calls this instead of
 /// opening a nested write transaction (which SQLite would reject).
@@ -2067,6 +2116,34 @@ pub(crate) fn installations_for_agent(
 /// Live external instances of one product. They are *not* linked to a session
 /// (`sessionId` is null in S02), so they can only ever downgrade a resume
 /// target to `unknown`, never prove it is free.
+pub(crate) fn reconcile_absent_discovery_processes(
+    conn: &Connection,
+    host_id: &str,
+    present_pids: &std::collections::BTreeSet<u32>,
+) -> Result<(), AppError> {
+    // A successful OS enumeration proves absence even after an engine restart,
+    // when old persisted identities are no longer in its in-memory snapshot.
+    // Presence alone proves neither identity nor readability: leave those rows
+    // for the ordinary inspect/merge path, including partial-access failures.
+    let mut statement = conn.prepare(
+        "SELECT DISTINCT pid FROM discovery_processes WHERE host_id = ?1 AND state = 'alive'",
+    )?;
+    let pids = statement.query_map([host_id], |row| row.get::<_, u32>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    for pid in pids {
+        if !present_pids.contains(&pid) {
+            conn.execute(
+                "UPDATE discovery_processes SET state = 'exited', freshness = 'stale',
+                 state_reason = 'process-ended', updated_at_ms = ?3
+                 WHERE host_id = ?1 AND pid = ?2 AND state = 'alive'",
+                params![host_id, pid, now_ms()],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn alive_discovery_processes(
     conn: &Connection,
     agent_id: &str,

@@ -705,3 +705,193 @@ export interface TerminalNotify {
   bufferedBytes: number;
   droppedBytes: number;
 }
+
+// ---------------------------------------------------------------------------
+// S05 structured runtime (`docs/contracts/runtime-v1.md`)
+// ---------------------------------------------------------------------------
+
+export type RuntimeTransport = "native" | "acp";
+export type RuntimeCapabilityStatus = "supported" | "unsupported" | "unverified";
+export type RuntimeEvidence = "live" | "document" | "fixture";
+
+export interface RuntimeCapabilityView {
+  product: string;
+  productName: string;
+  agentId: string;
+  installationId: string | null;
+  version: string | null;
+  executable: HostPath | null;
+  transport: RuntimeTransport;
+  structuredChat: RuntimeCapabilityStatus;
+  permissionFlow: RuntimeCapabilityStatus;
+  toolEvents: RuntimeCapabilityStatus;
+  cancel: RuntimeCapabilityStatus;
+  resume: RuntimeCapabilityStatus;
+  evidence: RuntimeEvidence;
+  entry: string | null;
+  reason: string | null;
+  notes: string[];
+}
+
+export interface RuntimeCapabilitiesView {
+  schemaVersion: number;
+  items: RuntimeCapabilityView[];
+  note: string;
+}
+
+export interface RuntimePermissionOption {
+  optionId: string;
+  label: string;
+  kind: string;
+}
+
+export interface RuntimePermissionView {
+  permissionId: string;
+  nativeRequestId: string | null;
+  toolCallId: string | null;
+  title: string;
+  detail: string | null;
+  kind: string;
+  options: RuntimePermissionOption[];
+  state: "pending" | "answered" | "expired" | "cancelled";
+  selectedOptionId: string | null;
+  autoDenied: boolean;
+  reason: string | null;
+  turnId: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export interface RuntimeMessageView {
+  messageId: string;
+  role: "assistant" | "user" | "system";
+  text: string;
+  complete: boolean;
+  seq: number;
+}
+
+export interface RuntimeToolView {
+  toolCallId: string;
+  permissionId: string | null;
+  authorization: string;
+  execution: string;
+  outcome: string;
+  name: string;
+  kind: string;
+  status: string;
+  input: unknown;
+  output: string | null;
+  isError: boolean;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+export interface RuntimeTurnView {
+  turnId: string;
+  state: string;
+  startedAt: string;
+  endedAt: string | null;
+  model: string | null;
+  effort: string | null;
+  reason: string | null;
+}
+
+export interface RuntimeRunView {
+  schemaVersion: number;
+  runId: string;
+  sessionId: string;
+  agentId: string;
+  installationId: string | null;
+  product: string;
+  productName: string;
+  transport: RuntimeTransport;
+  title: string;
+  cwd: HostPath;
+  executionState: ExecutionStatus;
+  interactionState: InteractionStatus;
+  turn: RuntimeTurnView | null;
+  nativeSessionId: string | null;
+  process: ProcessIdentity | null;
+  launchArgv: string[];
+  messages: RuntimeMessageView[];
+  tools: RuntimeToolView[];
+  permissions: RuntimePermissionView[];
+  lastSeq: number;
+  journalTruncated: boolean;
+  startedAt: string;
+  endedAt: string | null;
+  resumable: boolean;
+  notes: string[];
+  error: AppError | null;
+}
+
+/** Frozen event envelope (`docs/contracts/events.schema.json`). */
+export interface EventEnvelope {
+  schemaVersion: number;
+  sessionId: string | null;
+  runId: string | null;
+  streamId: string;
+  seq: number;
+  timestamp: string;
+  kind: string;
+  source: string;
+  nativeEventId: string | null;
+  sourceKey: string;
+  payload: Record<string, unknown>;
+}
+
+export interface RuntimeEventPage {
+  schemaVersion: number;
+  runId: string;
+  sessionId: string;
+  items: EventEnvelope[];
+  nextCursor: number;
+  droppedBefore: number;
+  lastSeq: number;
+}
+
+export interface RuntimeListView {
+  schemaVersion: number;
+  items: RuntimeRunView[];
+  activeCount: number;
+  maxRuns: number;
+  note: string;
+}
+
+export interface RuntimeNotify {
+  runId: string;
+  seq: number;
+  kind: "event" | "state" | "permission";
+  interactionState: InteractionStatus;
+  executionState: ExecutionStatus;
+}
+
+export interface RuntimeStartInput {
+  installationId: string;
+  cwd: string;
+  prompt?: string;
+  title?: string;
+  permissionTimeoutMs?: number;
+  model?: string;
+  effort?: string;
+}
+
+export interface RuntimeAnswerInput {
+  runId: string;
+  permissionId: string;
+  optionId: string;
+}
+
+export interface RuntimeReadQuery {
+  runId: string;
+  cursor?: number | null;
+  maxEvents?: number;
+}
+
+export interface RuntimeResumeInput {
+  sessionId: string;
+  installationId?: string;
+  cwd?: string;
+  prompt?: string;
+  permissionTimeoutMs?: number;
+}

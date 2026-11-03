@@ -833,7 +833,14 @@ impl DiscoveryEngine {
             .collect::<Vec<TrackedProcess>>();
         drop(state);
 
-        let persist_error = self.persist(&snapshot);
+        let mut persist_error = self.persist(&snapshot);
+        let conn = self.service.store().connection().lock();
+        if let Err(error) = crate::multicli::repo::reconcile_absent_discovery_processes(
+            &conn, &self.host_id, &present_pids,
+        ) {
+            persist_error.get_or_insert(error.with_retryable(true));
+        }
+        drop(conn);
 
         SnapshotOutcome {
             partial,

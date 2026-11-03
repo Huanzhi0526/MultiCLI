@@ -146,6 +146,7 @@ pub fn resolve_resume_target(
         .as_ref()
         .map(|installation| installation.executable.clone());
 
+    let execution_available = status == "resolved";
     Ok(ResumeTargetView {
         session_id: session.id.clone(),
         agent_id: session.agent_id.clone(),
@@ -160,7 +161,7 @@ pub fn resolve_resume_target(
         workspaces,
         conflicts,
         evidence,
-        execution_available: false,
+        execution_available,
         note: RESUME_NOTE.to_string(),
     })
 }

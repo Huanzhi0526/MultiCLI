@@ -15,6 +15,10 @@ use crate::multicli::history::{
     HistoryRefreshQuery, HistorySearchQuery, HistorySourceUpdate, HistorySourceView, MessagePage,
     MessagePageQuery, ResumeTargetView, SearchPage, SessionMetadataView,
 };
+use crate::multicli::runtime::{
+    RuntimeAnswerRequest, RuntimeCancelRequest, RuntimeManager, RuntimeNotifyFn, RuntimeReadRequest,
+    RuntimeResumeRequest, RuntimeSendRequest, RuntimeStartRequest, RuntimeStopRequest,
+};
 use crate::multicli::terminal::{
     NotifyFn as TerminalNotifyFn, TerminalCloseRequest, TerminalCloseView, TerminalLimits,
     TerminalLimitsUpdate, TerminalListView, TerminalManager, TerminalNotify, TerminalOpenSpec,
@@ -44,6 +48,10 @@ const TERMINAL_EVENT: &str = "multicli://terminal";
 /// Asked by the tray when the user picks "退出"; the window decides between
 /// cancelling and stopping this application's own terminals.
 const QUIT_REQUESTED_EVENT: &str = "multicli://quit-requested";
+
+/// Structured-runtime notification. Like the terminal one it carries only a few
+/// bytes; the events themselves are pulled with `multicli_runtime_read`.
+const RUNTIME_EVENT: &str = "multicli://runtime";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,6 +101,10 @@ pub struct MultiCliRuntime {
     discovery: Mutex<Option<Arc<DiscoveryEngine>>>,
     history: Mutex<Option<Arc<HistoryEngine>>>,
     terminal: Mutex<Option<Arc<TerminalManager>>>,
+    runtime: Mutex<Option<Arc<RuntimeManager>>>,
+    /// Stops the permission sweeper when the application exits. It only ever
+    /// expires this application's own requests.
+    runtime_sweeper: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
     /// Set once in `setup`; the terminal manager emits through it. A missing
     /// handle is a real error, never a silently dropped notification.
     app: Mutex<Option<tauri::AppHandle>>,
@@ -113,6 +125,8 @@ impl MultiCliRuntime {
             discovery: Mutex::new(None),
             history: Mutex::new(None),
             terminal: Mutex::new(None),
+            runtime: Mutex::new(None),
+            runtime_sweeper: Mutex::new(None),
             app: Mutex::new(None),
         }
     }
@@ -313,6 +327,73 @@ impl MultiCliRuntime {
         Ok(manager)
     }
 
+    /// Lazily creates the structured runtime registry. It shares the same
+    /// database and data root, writes only under this profile and emits one
+    /// small notification per state change.
+    pub fn runtime(&self) -> Result<Arc<RuntimeManager>, AppError> {
+        let mut slot = self.runtime.lock();
+        if let Some(manager) = slot.as_ref() {
+            return Ok(manager.clone());
+        }
+        let service = self.service()?;
+        let app = self.app.lock().clone().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::Io,
+                "the application handle is not attached; the runtime cannot report events",
+            )
+            .with_details(serde_json::json!({ "stage": "attachApp" }))
+            .with_retryable(true)
+        })?;
+        let notifier: RuntimeNotifyFn = Arc::new(move |payload| {
+            use tauri::Emitter;
+            let _ = app.emit(RUNTIME_EVENT, &payload);
+        });
+        let manager = Arc::new(RuntimeManager::new(
+            service,
+            self.root.clone(),
+            self.profile.clone(),
+            notifier,
+        )?);
+        // One sweeper for every run: a permission request that nobody answers
+        // must become `expired` instead of spinning forever. It only ever
+        // answers with the request's own deny option.
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sweep_manager = Arc::clone(&manager);
+        let sweep_stop = Arc::clone(&stop);
+        std::thread::Builder::new()
+            .name("multicli-runtime-sweeper".into())
+            .spawn(move || {
+                while !sweep_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(1_000));
+                    if sweep_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        return;
+                    }
+                    sweep_manager.sweep_permissions();
+                }
+            })
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::Io,
+                    format!("failed to start the runtime sweeper: {error}"),
+                )
+                .with_details(serde_json::json!({ "stage": "runtimeSweeper" }))
+            })?;
+        *self.runtime_sweeper.lock() = Some(stop);
+        *slot = Some(manager.clone());
+        Ok(manager)
+    }
+
+    /// Ends every owned protocol connection. Called from the application exit
+    /// event; external CLI processes are never enumerated.
+    pub fn stop_runtime(&self) {
+        if let Some(stop) = self.runtime_sweeper.lock().as_ref() {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        if let Some(manager) = self.runtime.lock().as_ref() {
+            manager.shutdown_all();
+        }
+    }
+
     /// Ends every owned terminal tree. Called from the application exit event
     /// so a crash-free exit never leaves an orphan family; external processes
     /// are not enumerated at all.
@@ -327,7 +408,7 @@ impl MultiCliRuntime {
 fn multicli_baseline_info(runtime: State<'_, MultiCliRuntime>) -> Result<BaselineInfo, String> {
     Ok(BaselineInfo {
         product: "MultiCLI",
-        stage: "S04 — managed terminal and process lifecycle",
+        stage: "S05 — structured protocol runtime, permissions and continuation",
         profile: runtime.profile().to_string(),
         data_root: runtime.root().display().to_string(),
         upstream_commit: "6c46345a727e7c1b57e0dacecb4fe063d88ee8dc",
@@ -852,6 +933,7 @@ async fn multicli_app_quit(
             "must be true; quitting is never implicit",
         ));
     }
+    runtime.stop_runtime();
     if let Ok(manager) = runtime.terminal() {
         let request = TerminalShutdownAllRequest {
             mode: Some(TerminalStopMode::Gentle),
@@ -871,6 +953,121 @@ async fn multicli_app_quit(
         "the application handle is not attached",
     )
     .with_details(serde_json::json!({ "stage": "quit" })))
+}
+
+// ---------------------------------------------------------------------------
+// S05 structured runtime commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn multicli_runtime_capabilities(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeCapabilitiesView, AppError> {
+    runtime.runtime()?.capabilities()
+}
+
+#[tauri::command]
+async fn multicli_runtime_start(
+    spec: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeRunView, AppError> {
+    let spec: RuntimeStartRequest = required_argument(spec, "spec")?;
+    spec.validate()?;
+    let manager = runtime.runtime()?;
+    tauri::async_runtime::spawn_blocking(move || manager.start(&spec))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+async fn multicli_runtime_resume(
+    spec: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeRunView, AppError> {
+    let spec: RuntimeResumeRequest = required_argument(spec, "spec")?;
+    spec.validate()?;
+    let manager = runtime.runtime()?;
+    tauri::async_runtime::spawn_blocking(move || manager.resume(&spec))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+async fn multicli_runtime_send(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeRunView, AppError> {
+    let query: RuntimeSendRequest = required_argument(query, "query")?;
+    query.validate()?;
+    let manager = runtime.runtime()?;
+    tauri::async_runtime::spawn_blocking(move || manager.send(&query))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+async fn multicli_runtime_cancel(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeRunView, AppError> {
+    let query: RuntimeCancelRequest = required_argument(query, "query")?;
+    query.validate()?;
+    let manager = runtime.runtime()?;
+    tauri::async_runtime::spawn_blocking(move || manager.cancel(&query))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+async fn multicli_runtime_answer(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeRunView, AppError> {
+    let query: RuntimeAnswerRequest = required_argument(query, "query")?;
+    query.validate()?;
+    let manager = runtime.runtime()?;
+    tauri::async_runtime::spawn_blocking(move || manager.answer(&query))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+async fn multicli_runtime_stop(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeRunView, AppError> {
+    let query: RuntimeStopRequest = required_argument(query, "query")?;
+    query.validate()?;
+    let manager = runtime.runtime()?;
+    tauri::async_runtime::spawn_blocking(move || manager.stop(&query))
+        .await
+        .map_err(blocking_error)?
+}
+
+#[tauri::command]
+fn multicli_runtime_get(
+    run_id: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeRunView, AppError> {
+    let run_id: String = required_argument(run_id, "runId")?;
+    runtime.runtime()?.get(&run_id)
+}
+
+#[tauri::command]
+fn multicli_runtime_read(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeEventPage, AppError> {
+    let query: RuntimeReadRequest = required_argument(query, "query")?;
+    query.validate()?;
+    runtime.runtime()?.read(&query)
+}
+
+#[tauri::command]
+fn multicli_runtime_list(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::runtime::RuntimeListView, AppError> {
+    Ok(runtime.runtime()?.list())
 }
 
 #[derive(Serialize)]
@@ -1078,7 +1275,7 @@ pub fn run() {
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("MultiCLI — S04")
+            .title("MultiCLI — S05")
             .inner_size(1320.0, 820.0)
             .min_inner_size(960.0, 640.0)
             .data_directory(webview_directory)
@@ -1149,6 +1346,16 @@ pub fn run() {
             multicli_terminal_limits,
             multicli_terminal_update_limits,
             multicli_terminal_quit_check,
+            multicli_runtime_capabilities,
+            multicli_runtime_start,
+            multicli_runtime_resume,
+            multicli_runtime_send,
+            multicli_runtime_cancel,
+            multicli_runtime_answer,
+            multicli_runtime_stop,
+            multicli_runtime_get,
+            multicli_runtime_read,
+            multicli_runtime_list,
             multicli_app_quit
         ])
         .build(tauri::generate_context!())
@@ -1160,6 +1367,7 @@ pub fn run() {
                 if let Some(runtime) = tauri::Manager::try_state::<MultiCliRuntime>(handle) {
                     runtime.stop_discovery();
                     runtime.stop_history();
+                    runtime.stop_runtime();
                     runtime.stop_terminals();
                 }
             }

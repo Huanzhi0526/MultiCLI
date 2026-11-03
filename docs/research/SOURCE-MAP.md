@@ -1,4 +1,4 @@
-# 实际源码映射（S00–S04）
+# 实际源码映射（S00–S05）
 
 固定上游 `6c46345a727e7c1b57e0dacecb4fe063d88ee8dc`；以下路径相对 app。现存文件与拟新增路径明确分开。
 
@@ -27,8 +27,12 @@ S02 已经独立代码、真实 Windows 后端与实窗验收 ACCEPTED。后端 
 
 前端 `src/multicli/SessionBrowser.tsx` 保留 S01 三栏，App.tsx 顶部切换；`src/multicli/discovery/{InstallationsView,ProcessesView,controls,useDiscoveryScan}` 已存在，组件后缀 tsx、hook 后缀 ts。新接口详见 docs/contracts/discovery-v1.md，三份原冻结 schema 未改。没有恢复旧 startup/history/terminal。
 
-S03 已独立验收 ACCEPTED：`src-tauri/src/multicli/history/{model,ids,parser,scan,repo,query,search,resume,engine,guard,tooling,tests}`；前端 `src/multicli/history/{HistoryView,SourcesPanel,SearchPanel,SessionPanel,useHistory}`。工作区/Agent 详情经 `usePagedResource.ts::useSessionDetail` 读取有界 metadata/messages；接口 `docs/contracts/history-v1.md`、格式 `docs/research/HISTORY-FORMATS.md`。schema v6 沿 v3→v4→v5→v6 迁移，逻辑/物理块分层；multicli_bootstrap 仍为唯一启动和 IPC 注册边界。search repo 过滤匹配只 materialize 一次，计数在 cursor 过滤之前，空页保留总数。resume 目前只解析目标/冲突，不执行恢复。
+S03 已独立验收 ACCEPTED：`src-tauri/src/multicli/history/{model,ids,parser,scan,repo,query,search,resume,engine,guard,tooling,tests}`；前端 `src/multicli/history/{HistoryView,SourcesPanel,SearchPanel,SessionPanel,useHistory}`。工作区/Agent 详情经 `usePagedResource.ts::useSessionDetail` 读取有界 metadata/messages；接口 `docs/contracts/history-v1.md`、格式 `docs/research/HISTORY-FORMATS.md`。schema v6 沿 v3→v4→v5→v6 迁移，逻辑/物理块分层；multicli_bootstrap 仍为唯一启动和 IPC 注册边界。search repo 过滤匹配只 materialize 一次，计数在 cursor 过滤之前，空页保留总数。resume.rs只解析目标/冲突；S05显式执行交给RuntimeManager，查看/检查仍无执行副作用。
 
 S04 已独立验收 ACCEPTED：`src-tauri/src/multicli/terminal/{model,launch,ring,logfile,identity,session,manager,tests}.rs`，前端 `src/multicli/terminal/{TerminalPane,TerminalWorkspace,xtermLoader}`；自有 Job 帮助复用 `engine/job.rs`。IPC/托盘/退出仍只在 multicli_bootstrap 集成；schema 保持 v6，契约 `docs/contracts/terminal-v1.md`。独立验收与已修缺陷见 `docs/execution/S04-ACCEPTANCE.md`；不是上游旧终端入口复活，也不实现 S05 协议聊天。
 
 S04 合成原生 UI 压力入口：src-tauri/examples/multicli_terminal_ui_bench.rs 与 tests/multicli-terminal-ui。仅显式测试启动，绝不由产品启动导入。
+
+S05 结构化运行时（R2后主管收尾ACCEPTED；见S05-ACCEPTANCE）：`src-tauri/src/multicli/runtime/{model,envelope,process,run,launch,manager,tests}.rs` 与 `runtime/adapters/{mod,codex,claude,codebuddy}.rs`；前端 `src/multicli/runtime/{RuntimeView.tsx,useRuntime.ts,runtimeModel.ts}`。契约 `docs/contracts/runtime-v1.md`，10 个 IPC 命令与 `multicli://runtime` 通知仍只在 `multicli_bootstrap.rs` 注册；schema 保持 v6，只新增 `service/repo::set_session_native_id` 一处写回。真实验收探针 `src-tauri/examples/multicli_runtime_probe.rs` 仅显式运行，绝不由产品启动。三款入口：`codex app-server`、`claude -p --output-format stream-json … --permission-prompt-tool stdio`、`codebuddy --acp`；启动链复用 S04 的 `terminal::launch`。旧 `engine/{codex_app,claude,codebuddy}.rs` 仍只是参考，其中 `approvalPolicy:"never"` 的固定策略没有被移植。
+
+S05最终集成：SessionBrowser/历史SessionPanel共用ResumeBlock，resolved+明确点击经App请求路由到RuntimeView/useRuntime，再由Manager复核创建新Run。未知/冲突不可执行，检查无副作用。runtime/supervisor_tests.rs补生命周期、期限与持久化反例；discovery/engine.rs在成功OS枚举后调用repo缺席核对，释放重启遗留alive阻塞，不操作外部进程。前端/原生受测摘要冻结在私有scratch/S05/acceptance/supervisor-r2/closure-check。

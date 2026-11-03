@@ -214,6 +214,17 @@ impl MultiCliService {
         repo::ensure_session(&mut conn, session, created_at_ms)
     }
 
+    /// S05: records the protocol's native conversation id on a managed Session
+    /// after the handshake produced it. Never changes agent/host/namespace.
+    pub fn set_session_native_id(
+        &self,
+        session_id: &str,
+        native_id: &str,
+    ) -> Result<(), AppError> {
+        let conn = self.store.connection().lock();
+        repo::set_session_native_id(&conn, session_id, native_id)
+    }
+
     pub fn attach_workspace(&self, link: &SessionWorkspace) -> Result<SessionWorkspace, AppError> {
         link.validate()?;
         let mut conn = self.store.connection().lock();

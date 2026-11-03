@@ -160,6 +160,41 @@ fn details(
 }
 
 #[test]
+fn restart_reconciles_absent_persisted_process_only_after_successful_enumeration() {
+    let fixture = fixture("restart-persisted-process");
+    let argv = [fixture.exe.to_str().unwrap()];
+    fixture.backend.set_rows(
+        vec![raw(4242, None, &fixture.exe, &argv)],
+        vec![details(4242, "2026-11-02T01:00:00.1234567Z", None, &fixture.exe, &argv)],
+    );
+    fixture.engine.run_scan();
+    let alive = || {
+        let conn = fixture.service.store().connection().lock();
+        crate::multicli::repo::alive_discovery_processes(&conn, "codex").unwrap().len()
+    };
+    assert_eq!(alive(), 1);
+    let restarted = DiscoveryEngine::new(
+        HOST, &fixture.root.join("data"), fixture.service.clone(),
+        fixture.backend.clone(), ScannerEnvironment {
+            path_dirs: vec![fixture.exe.parent().unwrap().to_path_buf()],
+            user_profile: None, local_app_data: None, app_data: None, program_files: None,
+        },
+    );
+    fixture.backend.set_rows(Vec::new(), Vec::new());
+    fixture.backend.fail(true);
+    restarted.run_scan();
+    assert_eq!(alive(), 1, "enumeration failure cannot prove exit");
+    fixture.backend.fail(false);
+    fixture.backend.set_rows(vec![raw(4242, None, &fixture.exe, &argv)], Vec::new());
+    fixture.backend.deny(4242);
+    restarted.run_scan();
+    assert_eq!(alive(), 1, "a present but unreadable PID cannot prove exit");
+    fixture.backend.set_rows(Vec::new(), Vec::new());
+    restarted.run_scan();
+    assert_eq!(alive(), 0, "successful absence must release the stale resume blocker");
+}
+
+#[test]
 fn scan_finds_one_installation_and_one_instance_without_duplicates() {
     let fixture = fixture("basic");
     let argv = [

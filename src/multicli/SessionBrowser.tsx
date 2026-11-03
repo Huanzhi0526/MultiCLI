@@ -3,6 +3,7 @@ import type { MultiCliApi } from "./api";
 import { EntryTabs, ScopeList, SessionDetailView, SessionList } from "./components";
 import { sessionFilterKey } from "./navigation";
 import { usePagedResource, useSessionDetail } from "./usePagedResource";
+import { ResumeBlock } from "./history/SessionPanel";
 import type {
   AgentListItem,
   Capability,
@@ -19,7 +20,7 @@ export type Entry = "workspaces" | "agents";
  * counts. This component is unchanged behaviourally; S02 only moved it out of
  * `App.tsx` so the discovery views can live beside it.
  */
-export default function SessionBrowser({ api }: { api: MultiCliApi }) {
+export default function SessionBrowser({ api, onResume }: { api: MultiCliApi; onResume?: (sessionId: string) => void }) {
   const [entry, setEntry] = useState<Entry>("workspaces");
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
@@ -157,6 +158,7 @@ export default function SessionBrowser({ api }: { api: MultiCliApi }) {
       </section>
 
       <main className="min-h-0 min-w-0 flex-1 overflow-auto">
+        {detail.data?.session.nativeId ? <ResumeBlock api={api} sessionId={detail.data.session.id} onResume={onResume} /> : null}
         <SessionDetailView
           detail={detail}
           capabilities={capabilities}

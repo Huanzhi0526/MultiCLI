@@ -7,7 +7,7 @@ import SessionPanel from "./SessionPanel";
 import SourcesPanel from "./SourcesPanel";
 import { useHistorySession, useHistoryStatus, type SessionTarget } from "./useHistory";
 
-export default function HistoryView({ api }: { api: MultiCliApi }) {
+export default function HistoryView({ api, onResume }: { api: MultiCliApi; onResume?: (sessionId: string) => void }) {
   const sources = usePagedResource<HistorySourceView>(
     "history-sources",
     (cursor) => api.listHistorySources({ limit: 50, cursor }),
@@ -62,7 +62,7 @@ export default function HistoryView({ api }: { api: MultiCliApi }) {
       />
       <SearchPanel api={api} sources={sources.items} onOpen={open} />
       <main className="min-h-0 min-w-0 flex-1 overflow-auto">
-        <SessionPanel api={api} state={session} />
+        <SessionPanel api={api} state={session} onResume={onResume} />
       </main>
     </div>
   );

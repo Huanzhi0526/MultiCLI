@@ -314,8 +314,12 @@ fn a_real_shell_round_trips_unicode_resize_and_ctrl_c() {
         2,
         Duration::from_secs(10),
     );
+    // The launcher resolves aliases before setting cwd. Runner TEMP can use
+    // an 8.3 spelling (or a junction), while cmd reports the resolved path.
+    // Keep checking the requested directory, using its canonical identity.
+    let expected_cwd = dunce::canonicalize(&cwd).expect("resolve the requested cwd");
     assert!(
-        text.contains(&cwd.display().to_string()),
+        text.contains(&expected_cwd.display().to_string()),
         "shell did not start in the requested cwd: {text:?}"
     );
 

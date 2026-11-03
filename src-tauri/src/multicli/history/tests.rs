@@ -1520,7 +1520,11 @@ fn resume_resolution_is_read_only_and_reports_conflicts() {
     );
     assert_eq!(resolved.product.as_deref(), Some("codex"));
     assert!(resolved.installation_id.is_some());
-    assert!(!resolved.execution_available);
+    assert!(resolved.execution_available);
+    // S05 exposes a separate explicit resume action. Resolving this target
+    // still performs no execution and creates no Run.
+    assert_eq!(resume::resolution_scope()["spawnsProcess"], false);
+    assert_eq!(resume::resolution_scope()["createsRun"], false);
 
     // An active run blocks the target.
     fixture

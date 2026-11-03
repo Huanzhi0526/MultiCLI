@@ -243,7 +243,7 @@ native/acp/pty 连接）。`sourceNamespace = "history:<agent>:<product>:<config
 | `workspaces[]` | 会话工作区 |
 | `conflicts[]` | `{kind, detail}`：`active-run` / `live-external-process` / `missing-native-id` |
 | `evidence[]` | 固定证据标签 |
-| `executionAvailable` | 本阶段恒为 `false` |
+| `executionAvailable` | S05起：仅`resolved`目标为`true`；只表明可通过独立`runtime_resume`显式继续，此解析调用仍不启动进程或发送消息 |
 | `note` | 固定说明：不启动进程、不发 prompt、不写 CLI 文件 |
 
 判定顺序（`blocked` 是最强的确定性结论，优先于“不支持/不确定”）：

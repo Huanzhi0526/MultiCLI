@@ -24,6 +24,14 @@ import type {
   ProcessDiscoveryPage,
   ProcessQuery,
   ResumeTargetView,
+  RuntimeAnswerInput,
+  RuntimeCapabilitiesView,
+  RuntimeEventPage,
+  RuntimeListView,
+  RuntimeReadQuery,
+  RuntimeResumeInput,
+  RuntimeRunView,
+  RuntimeStartInput,
   ScanView,
   SearchPage,
   SessionDetail,
@@ -91,6 +99,17 @@ export interface MultiCliApi {
   terminalLimits(): Promise<TerminalLimits>;
   terminalQuitCheck(): Promise<TerminalQuitCheckView>;
   appQuit(): Promise<void>;
+  // S05 structured runtime
+  runtimeCapabilities(): Promise<RuntimeCapabilitiesView>;
+  runtimeStart(input: RuntimeStartInput): Promise<RuntimeRunView>;
+  runtimeResume(input: RuntimeResumeInput): Promise<RuntimeRunView>;
+  runtimeSend(runId: string, text: string): Promise<RuntimeRunView>;
+  runtimeCancel(runId: string, graceMs?: number): Promise<RuntimeRunView>;
+  runtimeAnswer(input: RuntimeAnswerInput): Promise<RuntimeRunView>;
+  runtimeStop(runId: string, graceMs?: number): Promise<RuntimeRunView>;
+  runtimeGet(runId: string): Promise<RuntimeRunView>;
+  runtimeRead(query: RuntimeReadQuery): Promise<RuntimeEventPage>;
+  runtimeList(): Promise<RuntimeListView>;
 }
 
 function pageArgs(query: PageQuery): Record<string, unknown> {
@@ -254,6 +273,64 @@ export function createMultiCliApi(invokeFn: InvokeFn): MultiCliApi {
     terminalQuitCheck: () =>
       invokeFn<TerminalQuitCheckView>("multicli_terminal_quit_check"),
     appQuit: () => invokeFn<void>("multicli_app_quit", { confirm: true }),
+    runtimeCapabilities: () =>
+      invokeFn<RuntimeCapabilitiesView>("multicli_runtime_capabilities"),
+    runtimeStart: (input) =>
+      invokeFn<RuntimeRunView>("multicli_runtime_start", {
+        spec: {
+          installationId: input.installationId,
+          cwd: input.cwd,
+          ...(input.prompt ? { prompt: input.prompt } : {}),
+          ...(input.title ? { title: input.title } : {}),
+          ...(input.permissionTimeoutMs
+            ? { permissionTimeoutMs: input.permissionTimeoutMs }
+            : {}),
+          ...(input.model ? { model: input.model } : {}),
+          ...(input.effort ? { effort: input.effort } : {}),
+        },
+      }),
+    runtimeResume: (input) =>
+      invokeFn<RuntimeRunView>("multicli_runtime_resume", {
+        spec: {
+          sessionId: input.sessionId,
+          ...(input.installationId ? { installationId: input.installationId } : {}),
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+          ...(input.prompt ? { prompt: input.prompt } : {}),
+          ...(input.permissionTimeoutMs
+            ? { permissionTimeoutMs: input.permissionTimeoutMs }
+            : {}),
+        },
+      }),
+    runtimeSend: (runId, text) =>
+      invokeFn<RuntimeRunView>("multicli_runtime_send", { query: { runId, text } }),
+    runtimeCancel: (runId, graceMs) =>
+      invokeFn<RuntimeRunView>("multicli_runtime_cancel", {
+        query: { runId, ...(graceMs ? { graceMs } : {}) },
+      }),
+    runtimeAnswer: (input) =>
+      invokeFn<RuntimeRunView>("multicli_runtime_answer", {
+        query: {
+          runId: input.runId,
+          permissionId: input.permissionId,
+          optionId: input.optionId,
+        },
+      }),
+    runtimeStop: (runId, graceMs) =>
+      invokeFn<RuntimeRunView>("multicli_runtime_stop", {
+        query: { runId, ...(graceMs ? { graceMs } : {}) },
+      }),
+    runtimeGet: (runId) => invokeFn<RuntimeRunView>("multicli_runtime_get", { runId }),
+    runtimeRead: (query) =>
+      invokeFn<RuntimeEventPage>("multicli_runtime_read", {
+        query: {
+          runId: query.runId,
+          ...(query.cursor === undefined || query.cursor === null
+            ? {}
+            : { cursor: query.cursor }),
+          ...(query.maxEvents ? { maxEvents: query.maxEvents } : {}),
+        },
+      }),
+    runtimeList: () => invokeFn<RuntimeListView>("multicli_runtime_list"),
   };
 }
 

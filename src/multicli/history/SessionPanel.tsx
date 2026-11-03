@@ -211,7 +211,7 @@ function Metadata({ metadata }: { metadata: SessionMetadataView }) {
   );
 }
 
-function ResumeBlock({ api, sessionId }: { api: MultiCliApi; sessionId: string }) {
+export function ResumeBlock({ api, sessionId, onResume }: { api: MultiCliApi; sessionId: string; onResume?: (sessionId: string) => void }) {
   const { t } = useTranslation("multicli");
   const [target, setTarget] = useState<ResumeTargetView | null>(null);
   const [error, setError] = useState<AppError | null>(null);
@@ -224,6 +224,7 @@ function ResumeBlock({ api, sessionId }: { api: MultiCliApi; sessionId: string }
     setTarget(null);
     setError(null);
     setChecking(false);
+    return () => { requestRef.current += 1; };
   }, [sessionId]);
 
   const check = useCallback(() => {
@@ -249,6 +250,8 @@ function ResumeBlock({ api, sessionId }: { api: MultiCliApi; sessionId: string }
       });
   }, [api, sessionId]);
 
+  const canResume = Boolean(onResume && target?.sessionId === sessionId && target.status === "resolved" && target.executionAvailable);
+
   return (
     <section className="border-b border-separator-border px-5 py-3" data-testid="history-resume">
       <div className="flex flex-wrap items-center gap-2">
@@ -266,8 +269,9 @@ function ResumeBlock({ api, sessionId }: { api: MultiCliApi; sessionId: string }
         </button>
         <button
           type="button"
-          className="ml-auto rounded-md border border-separator-border px-2 py-1 text-[11px] opacity-60"
-          disabled
+          className="ml-auto rounded-md border border-separator-border px-2 py-1 text-[11px] disabled:opacity-60"
+          disabled={!canResume || checking}
+          onClick={() => { if (canResume) onResume?.(sessionId); }}
           title={t("historyResumeDisabled")}
           data-testid="history-resume-disabled"
         >
@@ -318,9 +322,11 @@ function ResumeBlock({ api, sessionId }: { api: MultiCliApi; sessionId: string }
 export default function SessionPanel({
   api,
   state,
+  onResume,
 }: {
   api: MultiCliApi;
   state: HistorySessionState;
+  onResume?: (sessionId: string) => void;
 }) {
   const { t } = useTranslation("multicli");
   const { metadata, page, status, error, loadMore, retry } = state;
@@ -385,7 +391,7 @@ export default function SessionPanel({
   return (
     <article className="flex min-h-0 flex-col" data-testid="history-detail">
       <Metadata metadata={metadata} />
-      <ResumeBlock api={api} sessionId={metadata.session.id} />
+      <ResumeBlock api={api} sessionId={metadata.session.id} onResume={onResume} />
       <section className="min-h-0 flex-1 overflow-auto px-5 py-3">
         <div className="flex items-center gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">

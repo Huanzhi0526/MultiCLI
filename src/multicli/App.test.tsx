@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import i18n from "@/lib/i18n";
 import App from "./App";
 import type { MultiCliApi } from "./api";
@@ -28,6 +28,10 @@ import type {
   ProcessDiscoveryView,
   ProcessQuery,
   ResumeTargetView,
+  RuntimeCapabilitiesView,
+  RuntimeEventPage,
+  RuntimeListView,
+  RuntimeRunView,
   ScanView,
   SearchHitView,
   SearchPage,
@@ -698,6 +702,94 @@ class FakeApi implements MultiCliApi {
   appQuit(): Promise<void> {
     this.quitCalls += 1;
     return Promise.resolve();
+  }
+
+  // The S05 runtime surface. The navigation test only needs these to exist: a
+  // structured run is never started from the shell-level assertions.
+  runtimeCapabilities(): Promise<RuntimeCapabilitiesView> {
+    return Promise.resolve({ schemaVersion: 1, items: [], note: "" });
+  }
+
+  runtimeStart(): Promise<RuntimeRunView> {
+    return Promise.reject({
+      code: "unsupported",
+      message: "not started in this test",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  runtimeResume(): Promise<RuntimeRunView> {
+    return Promise.reject({
+      code: "unsupported",
+      message: "not started in this test",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  runtimeSend(): Promise<RuntimeRunView> {
+    return Promise.reject({
+      code: "unsupported",
+      message: "no run",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  runtimeCancel(): Promise<RuntimeRunView> {
+    return Promise.reject({
+      code: "unsupported",
+      message: "no run",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  runtimeAnswer(): Promise<RuntimeRunView> {
+    return Promise.reject({
+      code: "unsupported",
+      message: "no run",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  runtimeStop(): Promise<RuntimeRunView> {
+    return Promise.reject({
+      code: "unsupported",
+      message: "no run",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  runtimeGet(): Promise<RuntimeRunView> {
+    return Promise.reject({
+      code: "not_found",
+      message: "no run",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  runtimeRead(): Promise<RuntimeEventPage> {
+    return Promise.reject({
+      code: "not_found",
+      message: "no run",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  runtimeList(): Promise<RuntimeListView> {
+    return Promise.resolve({
+      schemaVersion: 1,
+      items: [],
+      activeCount: 0,
+      maxRuns: 8,
+      note: "",
+    });
   }
 
   listWorkspaces(): Promise<Page<WorkspaceListItem>> {
@@ -1476,6 +1568,49 @@ describe("S03 history index", () => {
     expect(api.historyRebuilds).toEqual([]);
     await click(byTestId(rendered.container, "history-rebuild-confirm-hsrc-1"));
     expect(api.historyRebuilds).toEqual(["hsrc-1"]);
+  });
+
+  it("resumes a resolved historical session only after an explicit click and routes to the new run", async () => {
+    const api = new FakeApi();
+    api.historySources = page([historySource()]);
+    api.sessions = page([summary("hist-session-1", "codex", "历史会话标题")]);
+    api.historyResume = resumeTarget({ executionAvailable: true });
+    const resumed: RuntimeRunView = {
+      schemaVersion: 1, runId: "resumed-run", sessionId: "hist-session-1", agentId: "codex", installationId: "install-codex",
+      product: "codex", productName: "Codex CLI", transport: "native", title: "Resumed historical session",
+      cwd: {hostId:"local-windows",displayPath:"C:\\test",canonicalPath:"C:\\test"}, executionState:"running", interactionState:"idle",
+      turn:null,nativeSessionId:"native-1",process:null,launchArgv:[],messages:[],tools:[],permissions:[],lastSeq:0,journalTruncated:false,
+      startedAt:"2026-11-03T00:00:00Z",endedAt:null,resumable:false,notes:[],error:null,
+    };
+    const start = vi.spyOn(api,"runtimeResume").mockResolvedValue(resumed);
+    vi.spyOn(api,"runtimeGet").mockResolvedValue(resumed);
+    const send = vi.spyOn(api,"runtimeSend");
+    rendered = await renderApp(api);
+    await click(byTestId(rendered.container,"view-history"));
+    await click(byTestId(rendered.container,"history-session-hist-session-1"));
+    expect(start).not.toHaveBeenCalled();
+    await click(byTestId(rendered.container,"history-resume-check"));
+    expect(start).not.toHaveBeenCalled();
+    expect(byTestId<HTMLButtonElement>(rendered.container,"history-resume-disabled")?.disabled).toBe(false);
+    await click(byTestId(rendered.container,"history-resume-disabled"));
+    await flush();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledWith({sessionId:"hist-session-1",prompt:undefined});
+    expect(send).not.toHaveBeenCalled();
+    expect(byTestId(rendered.container,"runtime-run-header")?.textContent).toContain(resumed.title);
+  });
+
+  it("keeps an unknown resume target disabled even when an execution flag is present", async () => {
+    const api = new FakeApi();
+    api.sessions = page([summary("hist-session-1","codex","历史会话标题")]);
+    api.historyResume = resumeTarget({status:"unknown",executionAvailable:true});
+    const start=vi.spyOn(api,"runtimeResume");
+    rendered=await renderApp(api);
+    await click(byTestId(rendered.container,"view-history"));
+    await click(byTestId(rendered.container,"history-session-hist-session-1"));
+    await click(byTestId(rendered.container,"history-resume-check"));
+    expect(byTestId<HTMLButtonElement>(rendered.container,"history-resume-disabled")?.disabled).toBe(true);
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("shows a real search error and recovers on retry", async () => {

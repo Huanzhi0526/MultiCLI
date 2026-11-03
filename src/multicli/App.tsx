@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import "@/i18n/multicli";
@@ -10,10 +10,17 @@ import InstallationsView from "./discovery/InstallationsView";
 import ProcessesView from "./discovery/ProcessesView";
 import HistoryView from "./history/HistoryView";
 import TerminalWorkspace from "./terminal/TerminalWorkspace";
+import RuntimeView from "./runtime/RuntimeView";
 import type { AppError, DiagnosticsExport, TerminalQuitCheckView } from "./types";
 import { toAppError } from "./navigation";
 
-export type AppView = "sessions" | "history" | "installations" | "processes" | "terminal";
+export type AppView =
+  | "sessions"
+  | "history"
+  | "installations"
+  | "processes"
+  | "terminal"
+  | "runtime";
 
 interface ExportState {
   status: "idle" | "pending" | "done" | "error";
@@ -27,6 +34,7 @@ const VIEWS: { id: AppView; label: string; testId: string }[] = [
   { id: "installations", label: "navInstallations", testId: "view-installations" },
   { id: "processes", label: "navProcesses", testId: "view-processes" },
   { id: "terminal", label: "navTerminal", testId: "view-terminal" },
+  { id: "runtime", label: "navRuntime", testId: "view-runtime" },
 ];
 
 const QUIT_REQUESTED_EVENT = "multicli://quit-requested";
@@ -37,6 +45,13 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
   const [exportState, setExportState] = useState<ExportState>({ status: "idle" });
   const [quit, setQuit] = useState<TerminalQuitCheckView | null>(null);
   const [quitError, setQuitError] = useState<AppError | null>(null);
+  const [resumeRequest, setResumeRequest] = useState<{id: number; sessionId: string} | null>(null);
+  const resumeSequence = useRef(0);
+  const requestHistoryResume = useCallback((sessionId: string) => {
+    setResumeRequest({id: ++resumeSequence.current, sessionId});
+    setView("runtime");
+  }, []);
+  const handledResumeRequest = useCallback(() => setResumeRequest(null), []);
 
   useEffect(() => {
     // Keep the inherited boot watchdog from replacing a healthy mounted page.
@@ -184,8 +199,8 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
         ) : null}
       </header>
 
-      {view === "sessions" ? <SessionBrowser api={api} /> : null}
-      {view === "history" ? <HistoryView api={api} /> : null}
+      {view === "sessions" ? <SessionBrowser api={api} onResume={requestHistoryResume} /> : null}
+      {view === "history" ? <HistoryView api={api} onResume={requestHistoryResume} /> : null}
       {view === "installations" ? <InstallationsView api={api} /> : null}
       {view === "processes" ? <ProcessesView api={api} /> : null}
       {/* The terminal workspace stays mounted while another page is shown:
@@ -196,6 +211,14 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
         data-testid="terminal-host"
       >
         <TerminalWorkspace api={api} visible={view === "terminal"} />
+      </div>
+      {/* The runtime view stays mounted for the same reason as the terminal:
+          a structured run keeps its connection while another page is shown. */}
+      <div
+        className={view === "runtime" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
+        data-testid="runtime-host"
+      >
+        <RuntimeView api={api} visible={view === "runtime"} resumeRequest={resumeRequest} onResumeRequestHandled={handledResumeRequest} />
       </div>
 
       {quit ? (

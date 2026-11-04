@@ -4,11 +4,11 @@
 托管终端、结构化运行和账户用量**。工作台与索引都在本机运行；CLI 仍按各自官方方式联网调用模型，但本应用
 不接管外部启动的进程，也不把任何数据上传到自己的服务端。
 
-首版目标：Windows 11 x64、普通用户权限、未签名测试包。当前构建：**0.1.0（S07 源码候选，完整安装/性能验收中）**。
+首版目标：Windows 11 x64、普通用户权限、未签名测试包。当前构建：**0.1.0 Beta（S00–S07 已独立验收，本地未签名测试包；未发布公开 Release）**。
 
 - 当前状态与验收（主管维护）：[`docs/execution/STATUS.md`](docs/execution/STATUS.md)
 - 快速上手：[`QUICKSTART.md`](QUICKSTART.md)
-- 能力与版本实测（S00–S06 基线；S07-R1 增量见已知限制与交付文档）：[`COMPATIBILITY.md`](COMPATIBILITY.md)
+- 能力与版本实测（S00–S07 有限样本与未测边界）：[`COMPATIBILITY.md`](COMPATIBILITY.md)
 - 已知限制：[`docs/KNOWN-LIMITATIONS.md`](docs/KNOWN-LIMITATIONS.md)
 - 接口契约：[`docs/contracts/`](docs/contracts/)
 - 源码地图：[`docs/research/SOURCE-MAP.md`](docs/research/SOURCE-MAP.md)
@@ -35,7 +35,7 @@
 | 托管 ConPTY + xterm、多终端、参数链、托盘/退出、背压与资源上限 | 已交付（S04） |
 | 三核心结构化运行：新建/继续、权限往返、工具事件、取消、停止 | 已交付（S05，有限真实样本） |
 | 账户用量/额度池、九族 CLI 识别、扩展 PTY、自定义 CLI | 已交付（S06，覆盖有限，见 COMPATIBILITY） |
-| 本 profile 备份/恢复、统一验证入口、安装包与使用说明 | 源码已验收，安装/性能门禁待完成（S07） |
+| 本 profile 备份/恢复、统一验证入口、安装包与使用说明 | 已独立验收，安装/性能与Windows CI通过（S07） |
 
 **三核心**：Codex CLI 0.166.0、Claude Code 2.1.153、CodeBuddy Code 2.179.3。三款各有真实历史、结构化
 交互与继续/取消的有限样本；**样本不等于全版本承诺**，每款的分能力结论以 `COMPATIBILITY.md` 为准。
@@ -105,7 +105,7 @@ corepack pnpm install --frozen-lockfile --ignore-scripts
 - 未签名意味着 Windows 可能显示 SmartScreen 提示；本应用**不会**为此降低系统安全策略，也不提供签名证书。
 - 安装包必须从已提交源码构建；源码 commit、构建命令与 SHA-256 记录在
   [`docs/execution/deliveries/S07.md`](docs/execution/deliveries/S07.md)、
-  [`S07-R1.md`](docs/execution/deliveries/S07-R1.md) 与 `docs/execution/S07-ACCEPTANCE.md`（验收后）。
+  [`S07-R1.md`](docs/execution/deliveries/S07-R1.md) 与 `docs/execution/S07-ACCEPTANCE.md`。
 
 ## 施工方式
 

@@ -1,15 +1,6 @@
-# MultiCLI 历史契约 v1（S03）
+# MultiCLI 只读历史契约 v1
 
-本文件定义 S03 新增的只读历史索引与检索接口。它**不修改** S00 冻结的
-`domain.schema.json`、`error.schema.json`、`events.schema.json`，也不修改 S02 的
-`discovery-v1.md`。所有失败仍统一返回 `AppError`（`code / message / retryable /
-details`）。`schemaVersion = 1` 是历史视图的契约版本，与数据库 schema 版本（本阶段为
-v6）分开。
-
-- 主机范围：`local-windows`。
-- 只读：本组命令不提供 spawn / send / kill / attach / PTY / 历史编辑，也不写任何
-  CLI 配置文件。历史源目录只被读取。
-- 单位：时间为 UTC ISO-8601（毫秒，`Z` 结尾）；字节数为整数；`limit` 为 1..200。
+适用0.1.0。定义只读索引、搜索和显式继续目标解析，复用domain/error/events及discovery契约。历史视图schemaVersion=1与整体数据库v7分开。时间为UTC ISO-8601毫秒，分页limit为1..200。历史源不提供编辑、写入或通用进程接管。
 
 ## 1. 命令
 
@@ -35,7 +26,7 @@ v6）分开。
 
 ### 1.2 命令注册
 
-只在实现完成并通过本阶段验证后注册。`multicli_baseline_info`、`multicli_shell_smoke`
+只在实现完成并通过本契约验证后注册。`multicli_baseline_info`、`multicli_shell_smoke`
 仍是开发诊断命令，不属于本契约。没有提前注册 `start / send / kill / history-edit`。
 
 ## 2. 来源
@@ -55,7 +46,7 @@ v6）分开。
 
 - `product` 同时接受 `codex` / `claude` / `claude-code` / `codebuddy` /
   `codebuddy-code`，落库为规范键。
-- `configProfileId` 1..64 字符；本阶段 UI 默认 `unconfirmed-local`，不代表真实账号。
+- `configProfileId` 1..64 字符；本契约 UI 默认 `unconfirmed-local`，不代表真实账号。
 - `root` 必须是绝对路径、存在、可读、是目录。保存时会真的尝试列出一个条目，
   因此“目录存在但拒绝列出”在配置阶段就返回 `access_denied`，不会拖到索引时才失败。
   以下边界会被拒绝
@@ -80,7 +71,7 @@ v6）分开。
 | `sourceId` | 确定性 id：`hsrc-` + host/agent/profile/canonicalRoot 的 SHA-256 前 40 hex |
 | `hostId` / `agentId` / `product` | 归属 |
 | `installationId` | 可空；不伪造安装 |
-| `configProfileId` / `configProfileStatus` | 后者本阶段恒为 `unconfirmed` |
+| `configProfileId` / `configProfileStatus` | 后者本契约恒为 `unconfirmed` |
 | `root` | `HostPath`（display + canonical） |
 | `enabled` | 只影响索引任务，不删除源文件，也不删除已导入的会话 |
 | `parserVersion` | 映射代次；升级会使命中游标失效并触发重读 |
@@ -144,7 +135,7 @@ native/acp/pty 连接）。`sourceNamespace = "history:<agent>:<product>:<config
 |---|---|
 | `session` | 冻结的 `Session` DTO |
 | `workspaces[]` | `workspaceId / role(primary\|related) / evidence / path?` |
-| `runs[]` + `runTotal` | 最多 50 条；历史会话通常为 0。没有“按需更多”入口，因为本阶段不产生 Run |
+| `runs[]` + `runTotal` | 最多 50 条；历史会话通常为 0。没有“按需更多”入口，因为本契约不产生 Run |
 | `messageCount` | 该会话消息总数 |
 | `messageKinds[]` | 最多 32 种 kind 及计数 |
 | `firstMessageAt` / `lastMessageAt` | 时间边界 |
@@ -243,7 +234,7 @@ native/acp/pty 连接）。`sourceNamespace = "history:<agent>:<product>:<config
 | `workspaces[]` | 会话工作区 |
 | `conflicts[]` | `{kind, detail}`：`active-run` / `live-external-process` / `missing-native-id` |
 | `evidence[]` | 固定证据标签 |
-| `executionAvailable` | S05起：仅`resolved`目标为`true`；只表明可通过独立`runtime_resume`显式继续，此解析调用仍不启动进程或发送消息 |
+| `executionAvailable` | 仅`resolved`目标为`true`；只表明可通过独立`runtime_resume`显式继续，此解析调用仍不启动进程或发送消息 |
 | `note` | 固定说明：不启动进程、不发 prompt、不写 CLI 文件 |
 
 判定顺序（`blocked` 是最强的确定性结论，优先于“不支持/不确定”）：
@@ -259,9 +250,9 @@ native/acp/pty 连接）。`sourceNamespace = "history:<agent>:<product>:<config
 5. 没有已确认安装 → `unknown`。
 6. 其余 → `resolved`。
 
-**不以“未匹配进程”认定空闲**；打开历史不等于恢复成功；真正执行留给 S05。
+**不以“未匹配进程”认定空闲**；打开历史不等于恢复成功；真正执行由结构化运行时负责。
 
-## 6. 数据库 schema（v4 → v5 → v6）
+## 6. 历史索引表的迁移演进（当前整体v7）
 
 v4 新增（不改既有表、ID、外键）：
 
@@ -297,7 +288,7 @@ v5 重建 `history_message_origins`、v6 重建 `history_file_blocks`（均关�
 - 可重建：`messages`（仅无任何来源贡献的）、`history_message_origins`、`history_cursors`、
   `history_file_blocks`、`history_message_fts`。
 - 永不重建：`sessions`（稳定 id）、`user_session_notes`、`user_session_tags`、其他来源的
-  消息、S02 的安装/进程观察。
+  消息、安装与进程观察。
 - 一条消息只要还有**任意一个** `(来源, 文件)` 贡献就保留；截断/替换/重建某个文件只删除
   它自己贡献过、且再无其他贡献者的消息。稳定会话 id 与其备注/标签不受影响。
 
@@ -357,7 +348,7 @@ v5 重建 `history_message_origins`、v6 重建 `history_file_blocks`（均关�
 | 格式探测 | 64 行；期间无任何可识别记录才判定选错产品 |
 | 单消息正文 | 256 KiB |
 | 搜索正文 | 64 KiB/消息 |
-| 自动补扫间隔 | 30 s（监听只作加速；本阶段没有文件监听，靠周期补扫） |
+| 自动补扫间隔 | 30 s（监听只作加速；本契约没有文件监听，靠周期补扫） |
 | 轮转分片 | `*.jsonl.<1-3 位数字>` 与主文件一起列出；分片独立游标、独立身份 |
 
 列目录本身有界（深度 12、50,000 文件、访问预算），但不计入单 pass 的解析预算；

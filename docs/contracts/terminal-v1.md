@@ -1,13 +1,10 @@
-# terminal-v1：托管终端与进程生命周期契约（S04）
+# MultiCLI 托管终端与生命周期契约 v1
 
-状态：`ACCEPTED`（2026-11-03，Sol 修复、独立回归/完整20轮压力及用户实窗验收通过）。本文件只描述 S04 新增的
-接口与行为；三份冻结 schema（`domain.schema.json`、`error.schema.json`、`events.schema.json`）
-未改动。终端 `Run` 仍然是冻结的 `Run` 记录（`transport=pty`、`ownership=managed`），
-终端特有字段全部在本契约内。
+适用0.1.0。终端Run为transport=pty、ownership=managed，复用domain/error/events模型；当前整体数据库v7。终端专有视图与命令在本文件说明。
 
 ## 1. 范围与不变量
 
-1. **只控制自己创建的进程。** IPC 没有任何接收 PID 的入口；外部 CLI（S02 观察到的实例）
+1. **只控制自己创建的进程。** IPC 没有任何接收 PID 的入口；外部 CLI（已观察到的实例）
    无法从这里发送输入、停止或 attach。停止前必须用 `hostId + pid + creationTime` 复核身份。
 2. **一个终端 = 一个自有 ConPTY + 一个子进程树 + 一个 Run。** 子进程在汇报 `running`
    之前已进入 Job Object；Job 分配失败则创建直接失败，不允许“没有树约束地跑起来”。
@@ -27,7 +24,7 @@
 |---|---|---|
 | `shell` | `shell` 字段：`cmd` / `windows-powershell` / `pwsh` | `%SystemRoot%\System32\cmd.exe`、`WindowsPowerShell\v1.0\powershell.exe`，或 PATH 上的 `pwsh.exe` |
 | `installation` | `installationId`（`agent_installations` 行） | 该行记录的可执行文件路径（canonical 优先） |
-| `custom-cli`（S06） | `customCliId`（`custom_clis` 行） | 用户本地导入的可执行文件 canonical 路径 + 预设 argv；见 `usage-v1.md` §5 |
+| `custom-cli` | `customCliId`（`custom_clis` 行） | 用户本地导入的可执行文件 canonical 路径 + 预设 argv；见 `usage-v1.md` §5 |
 
 - `shell` 目标**不接受** `args`：它的 argv 是固定 launcher 形式（`cmd /d /q /k chcp 65001>nul`、
   `powershell -NoLogo -NoProfile`），用户文本没有机会变成 shell 命令。
@@ -78,7 +75,7 @@ trampoline 是 `<dataRoot>/terminal/launch/<terminalId>/run.cmd|run.ps1`，创�
 
 ## 3. DTO
 
-所有字段 camelCase、`deny_unknown_fields`。完整定义见 `src/multicli/types.ts` 的 S04 段与
+所有字段 camelCase、`deny_unknown_fields`。完整定义见 `src/multicli/types.ts` 的终端段与
 `src-tauri/src/multicli/terminal/model.rs`。
 
 ### 3.1 `TerminalOpenSpec`（创建入参）
@@ -88,7 +85,7 @@ trampoline 是 `<dataRoot>/terminal/launch/<terminalId>/run.cmd|run.ps1`，创�
   "target": { "kind": "shell", "shell": "cmd", "installationId": null },
   "args": ["--flag", "含空格 与&符号"],
   "cwd": "C:\\项目 目录",
-  "env": [{ "name": "MULTICLI_S04", "value": "1" }],
+  "env": [{ "name": "MULTICLI_SAMPLE", "value": "1" }],
   "cols": 120,
   "rows": 32,
   "title": "可选标题"
@@ -106,7 +103,7 @@ trampoline 是 `<dataRoot>/terminal/launch/<terminalId>/run.cmd|run.ps1`，创�
 - `executable`、`launchChain`、`launchArgv`（**实际 spawn 的 argv**，用于审计）、`args`、`cwd`
 - `envNames`：只回显变量名，不回显值
 - `state`：`starting` / `running` / `stopping` / `exited` / `failed`
-- `interactionStatus`：本阶段恒为 `unknown`
+- `interactionStatus`：本契约恒为 `unknown`
 - `identity`：`hostId + pid + creationTime`（OS 100ns 精度），未取得时为 `null`
 - `job`：`{mode: "kill-on-close"|"unassigned", assigned, reason}`
   （`unassigned` 目前不会被产出：分配 Job 失败会直接让创建失败，而不是“没有约束地跑起来”。
@@ -236,22 +233,7 @@ trampoline 是 `<dataRoot>/terminal/launch/<terminalId>/run.cmd|run.ps1`，创�
 - 不新增 schema 版本：终端身份复用 `runs` / `processes` / `run_process_links`，
   终端自有状态留在内存与日志里，因此无需 v7 迁移。
 
-## 9. 与 `docs/contracts/README.md` 草案的差异（主管确认）
+## 9. 输出与停止设计
 
-S00 冻结的说明里把终端接口草案写成
-`TerminalBackend: create / write / resize / subscribeOutput / close`。实际实现是
-`create / read / write / resize / stop / close / list`，其中 `read` 取代了
-`subscribeOutput` 的“把输出推给前端”：
-
-- 仍然有订阅事件 `multicli://terminal`，payload 含 `runId` / `terminalId` / `streamId` / `seq`，
-  语义与草案一致（通知有新数据或状态变化）；差别只在**字节正文由前端按游标拉取**。
-- 理由：Tauri 的 IPC 投递队列不在本应用的控制范围内。若按批推送正文，WebView 渲染慢时
-  事件会在前端排队，内存无上界，违反本阶段“慢 UI 不无限排队”的硬要求。拉取模型下，
-  落后量只存在于后端的有界环里，且被 `droppedBytes` 计数与提示。
-- 通知本身做了合流：每个终端最多一条未取走的 `output` 通知（`read` 清 dirty 标志），
-  所以通知也不会堆积。
-- 另外新增了 `stop`（草案只有 `close`）：阶段要求“Ctrl+C/温和停止”与“结束 CLI/强制终止”
-  分开呈现，一个 `close` 无法表达“打断但不结束”。
-
-主管于 S04 验收确认此增量：通知合流、正文按游标拉取、独立 stop 语义满足有界队列和停止层级要求。
-这三处差异不改变任何冻结 schema，也没有放宽验收条件；完整阶段结论以 S04-ACCEPTANCE 为准。
+输出通知合流，正文由前端按游标从有界环形缓冲拉取，避免WebView变慢时形成无界推送队列。read清理dirty状态；落后数据的丢弃通过计数呈现。
+Ctrl+C、温和停止、强制终止、关闭标签分别表达不同操作，不能合并成含混的单一close动作。

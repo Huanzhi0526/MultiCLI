@@ -1,14 +1,6 @@
-# MultiCLI 发现契约 v1（S02）
+# MultiCLI 安装与外部进程发现契约 v1
 
-本文件定义 S02 新增的安装识别与外部进程只读发现接口。它**不修改** S00 冻结的
-`domain.schema.json`、`error.schema.json` 与 `events.schema.json`；失败仍统一返回
-`AppError`（`code / message / retryable / details`）。
-
-- 契约版本：`schemaVersion = 1`（发现视图独立版本，独立于数据库 schema）。
-- 命名：IPC 一律 camelCase；内部 SQL 用 snake_case。
-- 主机范围：仅 `local-windows`（`hostId = "local-windows"`）。
-- 只读：本组接口不提供 spawn / send / kill / attach / PTY，也不读取进程环境、
-  PEB 工作目录或凭据。
+适用0.1.0。安装识别与外部进程只读观察，复用domain/error/events schema；当前整体数据库v7，签名产品范围见DISCOVERY-SIGNATURES。仅local-windows，不读取凭据或提供接管接口。
 
 ## 1. 命令
 
@@ -22,22 +14,14 @@
 `limit` 为 1..200，越界或畸形参数返回 `invalid_argument`。`Page<T>` 沿用冻结形状
 `{ items, nextCursor, total }`；`total` 是**同一过滤条件**的计数。
 
-`multicli_update_discovery_settings` 是本阶段唯一超出“三命令”表的接口：扫描间隔要有
-有界设置入口，而前端不能写文件。它只写本 profile 自有目录的
-`<dataRoot>/discovery-settings.json`，不触碰任何 CLI 配置。若主管不接受第四个命令，
-可只保留默认 3 秒间隔，删除该命令与设置控件即可，其余契约不受影响。
-
-### 命令注册
-
-只在实现完成并通过验收后注册。S00 的 `multicli_baseline_info`、`multicli_shell_smoke`
-仍是开发诊断命令，不属于本契约。
+`multicli_update_discovery_settings`持久化当前profile扫描间隔，写入`<dataRoot>/discovery-settings.json`，采用临时文件+rename，不修改CLI目录、系统代理或全局设置。baseline诊断命令保持开发用途。
 
 ## 2. `InstallationDiscoveryView`
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `installationId` | `string \| null` | 稳定 id：由 host + agent + profile + 可执行身份派生；版本变化不产生新 id |
-| `agentId` | `string` | `codex` / `claude` / `codebuddy` |
+| `agentId` | `string` | 产品注册表中的id，范围见签名技术说明 |
 | `product` | `string` | 展示名 |
 | `signatureId` | `string` | 命中的签名 id（`codex-cli` 等） |
 | `status` | `installed \| unverified \| missing-target \| historical-residue` | 见下 |
@@ -53,7 +37,7 @@
 | `probe.durationMs` | `number \| null` | 探测耗时 |
 | `probe.arguments` | `string[]` | 实际探测参数（如 `["--version"]`） |
 | `configProfileId` | `string` | 未取得真实 profile 时为 `unconfirmed-local` |
-| `configProfileStatus` | `confirmed \| unconfirmed` | 本阶段恒为 `unconfirmed`，不伪称 `default`/当前账号 |
+| `configProfileStatus` | `confirmed \| unconfirmed` | 本契约恒为 `unconfirmed`，不伪称 `default`/当前账号 |
 | `issueCode` / `issueReason` | `string \| null` | `missing-target`、`unexpected-entry-script`、`historical-residue` 等 |
 | `discoveredFrom` | `string` | `path` / `app-data-root` / `local-app-data-root` / `declared-residue` 等 |
 | `discoveredAt` | `string` | 首次进入当前扫描集的时间 |
@@ -95,7 +79,7 @@
 | `sourceProgram` | `string \| null` | 父进程的程序名（仅名字） |
 | `workspaceId` | `string \| null` | 仅在 CLI 带显式目录参数且该目录已登记为工作区时非空 |
 | `workspaceEvidence` | `string \| null` | 目前只有 `explicit-directory-argument` |
-| `sessionId` | `null` | **S02 恒为 null**，见 §5 |
+| `sessionId` | `null` | **发现视图此字段为null**，见 §5 |
 | `firstSeenAt` / `lastSeenAt` | `string` | UTC，毫秒 |
 | `lastSeenScan` | `number` | 最近看到它的代次 |
 
@@ -150,7 +134,7 @@ cursorGeneration, currentGeneration }`。宁可让 UI 重新加载第一页，�
 
 ## 5. 会话关联
 
-S02 **不创建** Session / Run。原因：`Run.transport` 的冻结取值是
+发现服务**不创建** Session / Run。原因：`Run.transport` 的冻结取值是
 `native | acp | pty`，没有一个能准确表达“未连接的只读观察”；把观察写成其中任何一种
 都是伪造协议。因此外部实例在独立发现视图中以 `sessionId = null` 呈现：
 
@@ -168,7 +152,7 @@ S02 **不创建** Session / Run。原因：`Run.transport` 的冻结取值是
 - 提示词、key/token、URL（含 query）、账号、任意用户参数、路径一律丢弃；
 - 数据库、IPC、错误 `details`、日志、诊断文件都只出现脱敏结果。
 
-`docs/execution/deliveries/S02.md` 记录合成敏感标记的实测结果。
+脱敏行为由discovery/redact.rs及对应合成测试维护。
 
 ## 7. 设置
 
@@ -176,10 +160,10 @@ S02 **不创建** Session / Run。原因：`Run.transport` 的冻结取值是
 越界返回 `invalid_argument`。持久化位置固定 `<dataRoot>/discovery-settings.json`，
 写入采用临时文件 + rename；不写任何 CLI 目录、注册表或系统代理设置。
 
-## 8. 与 S01 的关系
+## 8. 与会话导航的关系
 
 - `multicli_list_workspaces / list_agents / list_sessions / get_session /
   list_capabilities / export_diagnostics` 行为不变。
 - 发现会为真实产品登记 Agent 与安装行（`unconfirmed-local` profile），因此 Agent
   列表会显示出现过安装的产品；没有安装的产品不会凭空出现。
-- 数据库 schema 升到 v3；迁移前自动 `VACUUM INTO` 备份，事务化，失败整体回滚。
+- 当前整体数据库schema为v7；发现表最初引入于v3；迁移前自动 `VACUUM INTO` 备份，事务化，失败整体回滚。

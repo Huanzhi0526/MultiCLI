@@ -1,13 +1,6 @@
-# 结构化运行时契约 runtime-v1（S05）
+# MultiCLI 结构化运行时契约 v1
 
-本契约是 S05 新增的**增量**契约，不修改 S00 冻结的 `domain.schema.json`、`events.schema.json`、`error.schema.json`。
-一个结构化 Run 仍然是一条冻结的 `Run` 记录；本契约只描述协议层新增的请求、视图与事件 payload。
-
-- 版本：`RUNTIME_SCHEMA_VERSION = 1`，出现在每个视图的 `schemaVersion`。
-- 线上字段名：camelCase，未知字段一律拒绝（`deny_unknown_fields`）。
-- 唯一 IPC 注册点仍是 `src-tauri/src/multicli_bootstrap.rs`；前端入口 `src/main.tsx → src/multicli/App.tsx`。
-- 本契约不新增数据库表。Run/Session/Process 复用 S01 冻结模型；S05 验收时库为 **v6**，
-  S06 起整体 schema 为 **v7**（新增 usage/自定义 CLI 表，S05 的 Run 语义不变）。
+适用0.1.0。RUNTIME_SCHEMA_VERSION=1，字段camelCase；复用Session/Run/Process模型与事件，整体数据库v7。IPC注册点为multicli_bootstrap，前端入口为src/multicli/App.tsx。运行时不修改CLI全局配置；实际版本与能力见COMPATIBILITY。
 
 ## 1. 三款产品的入口与传输
 
@@ -19,7 +12,7 @@
 
 `--permission-prompt-tool stdio` 在 2.1.153 的 `--help` 中**不显示**，但被接受，且是唯一能拿到可应答权限请求的通道（见 §6.2）。
 
-启动链复用 S04 已验证的 `.exe` / `.cmd` / `.ps1` 三条链（`terminal::launch::plan_launch`），运行时不自己拼 shell 字符串。
+启动链复用 `.exe` / `.cmd` / `.ps1` 三条链（`terminal::launch::plan_launch`），运行时不自己拼 shell 字符串。
 
 ### 1.1 进程级环境差量
 
@@ -93,7 +86,7 @@
 
 ### 4.4 工具：双账本三字段
 
-这是本阶段最重要的模型修正。**"没有权限请求"不等于"被拒绝"**：Claude Code 在默认模式下对读操作与项目内编辑**静默执行**，从不询问。
+这是本契约最重要的模型修正。**"没有权限请求"不等于"被拒绝"**：Claude Code 在默认模式下对读操作与项目内编辑**静默执行**，从不询问。
 因此每个工具携带三个互不折叠的字段：
 
 | 字段 | 取值 | 含义 |
@@ -325,7 +318,7 @@ session/cancel  {sessionId}                                 // 通知
 | 轴 | 取值 | 含义 |
 |---|---|---|
 | 就绪 | 内部判定 | 安装是否有可用 canonical 可执行文件（不可用即 `unsupported`） |
-| 能力状态 | `supported` / `unsupported` / `unverified` | 本阶段是否在该版本上复现过该能力 |
+| 能力状态 | `supported` / `unsupported` / `unverified` | 本契约是否在该版本上复现过该能力 |
 | 证据层 | `live` / `document` / `fixture` | 证据来自真实 CLI、文档还是合成夹具 |
 
 只有**实测过的那个版本**（Codex `0.166.0`、Claude `2.1.153`、CodeBuddy `2.179.3`）才可能给出
@@ -334,20 +327,14 @@ session/cancel  {sessionId}                                 // 通知
 
 ## 7. 已知限制
 
-1. **Codex 审批以"端点可达"为前提**：S05 初次验收时本机 `chatgpt.com` / `api.openai.com` 被 DNS 污染到
-   `31.13.94.10` 且 443 不可达，任何真实回合都在约 200 s 后以 `turn/completed{status:"failed"}` 结束，
-   审批应答一帧都没发出过。R2 期间网络恢复后，同一探针实测：拒绝 → 目标文件不存在；允许 → 文件生成且内容正确；
-   `turn/interrupt` 被对端确认为 `cancelled`；`thread/resume` 在同一 native session 上开出新回合。
-   **样本数为 1 次/项**，且"端点不可达"会以完全相同的方式表现为回合失败，因此不能把一次通过当成稳定性结论。
-2. **CodeBuddy认证旧失败保留**：早期连接曾返回Authentication required；用户确认2.179.3普通CLI能回复后，主管新建ACP连接已取得真实权限、正文、取消与继续样本。没有调用authenticate、getUserInfo或读取/复制凭据；不能推断早期失败的根因或恢复原因。专有interruption面仍没有真实样本，旧失败与当前观察不得混为永久不支持或稳定性保证。
-3. `updatedInput` 可改性未验证；`permission_denials[]` 不可作判据。
-4. ACP stdio 仍会绑定本地 HTTP 端口并改写 `~/.codebuddy/web-ui-port.json`（CLI 自身行为，本应用不写该文件）。
-5. 本阶段只有单 Run 内多轮；跨 Run 并发同一 Session 被拒绝（`conflict`），不做自动接管。
-6. PTY 模式仍是 S04 的独立能力；结构化 Run 不是 PTY Run，二者不互换。
+- 三核心版本及有限真实覆盖见仓库兼容性表；网络或CLI认证失败与协议实现失败应分别排查，不自动logout或复制凭据。
+- updatedInput可改性、超大输出和各产品专有interruption面仍缺真实样本。
+- CodeBuddy ACP可能按CLI自身行为使用本地端口与自己的状态文件；MultiCLI不提供远程监听或重写账号。
+- 同一Session跨Run并发写入返回conflict，不自动接管；结构化Run与PTY Run不互换。
 
 ## 8. 非目标
 
 - 不实现远程/网络 Run、不做账号抓取、不读凭据、不把 API key 写入数据库或 Git。
 - 不实现"自动允许一切"或"静默拒绝一切"的策略；不用 `--dangerously-skip-permissions` 之类参数换取"能跑通"。
 - 不推断未声明的协议方法：缺失能力返回 `unsupported` / `unverified`，不循环试方法。
-- 不做额度和计费（S06）。
+- 本模块不负责额度和计费，用量由usage模块提供。

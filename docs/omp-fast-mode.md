@@ -1,3 +1,5 @@
+> 上游历史技术参考：来自保留的Desktop CC GUI资料，不是当前MultiCLI功能声明或工作计划。当前入口见仓库README与HANDOFF。
+
 # OMP Fast 模式
 
 在聊天输入框的模型菜单中选择 OMP，再选择明确的 `openai-codex/…` 模型。思考强度区域左侧的闪电按钮控制 Fast，右侧重置按钮恢复 OMP 设置：

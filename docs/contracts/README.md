@@ -1,6 +1,6 @@
-# MultiCLI 契约 v1（S00 已冻结）
+# MultiCLI 产品契约 v1
 
-本组为首批实现约定，不表示能力已实现。S00 已 ACCEPTED，现冻结此版本；开发需变化应先交主管判断，不自行修改以绕过验收。领域 schema 使用 camelCase；内部 SQL 可用 snake_case，但 IPC 只有一套语义。S00 两个 baseline 诊断命令不属于产品 API。
+适用产品0.1.0，整体SQLite schema v7。领域DTO与IPC使用camelCase；契约版本与数据库版本分开。变更需同步生产方、消费方和兼容行为，不能静默重解释字段。baseline诊断命令不属于常用业务接口。
 
 ## 身份与持久化约束
 
@@ -23,20 +23,18 @@ PermissionRequest 带 requestId、runId、原生请求 id、实际选项及 pend
 
 ## IPC 与接口边界
 
-所有产品命令前缀 `multicli_`；Tauri 仅注册当前已实现且通过验收的命令。前端不拼接系统命令，也不读取凭据。成功返回数据；失败 reject 一个 `AppError`（error.schema.json），不得把失败包装为成功空数组。列表命令使用 `limit`（1..200）、可空 cursor，响应 `{items,nextCursor,total}`；total 为同一过滤条件计数。默认顺序须稳定并加 id 次排序。
+所有产品命令前缀 `multicli_`；Tauri 仅注册当前已实现并接入当前产品的命令。前端不拼接系统命令，也不读取凭据。成功返回数据；失败 reject 一个 `AppError`（error.schema.json），不得把失败包装为成功空数组。列表命令使用 `limit`（1..200）、可空 cursor，响应 `{items,nextCursor,total}`；total 为同一过滤条件计数。默认顺序须稳定并加 id 次排序。
 
-S01 计划产品命令：`multicli_list_workspaces`、`multicli_list_agents`、`multicli_list_sessions`、`multicli_get_session`、`multicli_list_capabilities`。list_sessions 参数 `{query:{workspaceId?,agentId?,origin?,limit,cursor?}}`；详情输入 `{sessionId}`。S01-01 先实现库/服务与单元测试，S01-02 再接 IPC/导航，禁止先注册未实现命令。空库显示空状态，合成 fixture 只在测试，不在正式启动时插入演示数据。
+当前导航命令包括`multicli_list_workspaces`、`multicli_list_agents`、`multicli_list_sessions`、`multicli_get_session`、`multicli_list_capabilities`。列表参数为`{query:{workspaceId?,agentId?,origin?,limit,cursor?}}`，详情输入`{sessionId}`。空库显示空状态，合成fixture仅用于测试，不在正式启动插入演示数据。
 
-`HostBackend`: listProcesses / inspectProcess / resolveExecutable / spawn / watchFiles；spawn 接可执行绝对路径、argv 数组、工作目录、受限环境差量，返回自有句柄内部引用。
+发现与路径识别由discovery及path模块负责；协议由RuntimeManager和各产品adapter负责；历史由HistoryEngine及parser负责。启动使用受限argv、工作目录与进程级环境差量，不拼接任意shell字符串。
 
-`RuntimeAdapter`: probeCapabilities / start / send / cancelTurn / answerPermission / resume / stop。stop 对非 managed 返回 access_denied；cancelTurn 不等于 kill 进程。协议是 native/acp/pty，来源是 managed/external-observed/history-only，二者不混。
+TerminalManager提供open/read/write/resize/stop/close。输出通知与按游标read分开，停止与关闭分开；外部进程不提供通用接管接口。cancelTurn不等于kill，结构化协议与来源所有权分开。
 
-`HistoryParser`: discoverSources / parseIncremental / normalize / resolveResumeTarget；游标含文件身份、size、offset、尾部残片及 parserVersion。异常行隔离，轮转/截断校验，周期补扫修复监听丢失。
-
-`UsageProvider`: identifyAccount / fetchQuota / readUsage / officialUsageEntry；账户官方 ID 不可得时保留未确认 profile。`TerminalBackend`: create / write / resize / subscribeOutput / close；外部进程不提供通用接管接口。首版无 RemoteHost 实现、SSH 服务或远程设置页。
+额度由UsageCenter与provider模块提供；账户官方身份不可得时保留未确认配置，不把不同来源账户池混合。当前没有RemoteHost实现、SSH服务或远程设置页。
 
 ## 能力及用量
 
-能力 supported/unsupported/unverified 与证据层 document/fixture/live 分开，带产品版本、来源、验证时间、失败原因。S00 的 version/help 不是 live structuredChat PASS。
+能力 supported/unsupported/unverified 与证据层 document/fixture/live 分开，带产品版本、来源、验证时间、失败原因。版本/帮助输出 不是 live structuredChat PASS。
 
 QuotaPool、Snapshot 按账户池/窗口唯一，不按会话相加；UsageSample 可关联 Run，但不能将协议和历史中同一 token 再次计数。订阅额度、API 账单、CLI token、本地估算各自保留来源、单位、时间及 stale/error。缺失数值为 null，不能填 0 或据 token 推余额；API key/cookie 不存数据库。

@@ -1,8 +1,6 @@
-# usage-v1：账户、额度池与用量读取契约（S06）
+# MultiCLI 账户、额度池与用量读取契约 v1
 
-状态：`SUBMITTED`（实现方回交，等待主管独立验收）。本文件只描述 S06 新增的接口与行为；
-三份冻结 schema（`domain.schema.json`、`error.schema.json`、`events.schema.json`）未改动。
-用量相关的 `Run` / `Session` 语义不变：读取额度不创建 Run，也不接管任何 CLI 会话。
+适用0.1.0。整体数据库v7；读取额度不创建Run，不接管CLI会话。用量和自定义CLI视图与基础domain/error/events模型分开。缺失字段、失败与未知状态保持真实。
 
 ## 1. 范围与不变量
 
@@ -21,7 +19,7 @@
    `cachedInputTokens` 是子集标记，不是加数。
 5. **只读。** 读取不登录、不登出、不兑换重置额度、不充值、不发邮件、不注入斜杠命令；不抓
    cookie 或浏览器会话，不复制凭据。读取进程由本应用创建，读后由本应用关闭。
-6. **只扫描用户配置的根。** 本地转录读取只走 S03 已启用（`enabled=1`）的只读来源根，
+6. **只扫描用户配置的根。** 本地转录读取只走 已启用（`enabled=1`）的只读来源根，
    没有隐藏默认根、没有全盘遍历；只解析数值，不落正文、不进搜索索引。
 7. **漏读就不是总量。** 转录扫描的每一种明确遗漏——超过单文件上限、深度剪枝、含 `usage` 的行
    无法解析、文件/目录/条目不可读、文件数或字节预算用尽——都把整趟标记为**不完整**：窗口与累计值
@@ -97,12 +95,12 @@
 时只处理该产品；单个 provider 失败不会中止其余产品（它自己的 `outcome` 带错误原因）。两个命令
 都是异步命令，读取期间不阻塞窗口主线程。
 
-### 4.1 安装状态是三态（S07）
+### 4.1 安装状态是三态
 
 `catalog[].presence` 是 `installed | not-installed | undiscovered`，`installed` 只是
 `presence === installed` 的派生字段。判定只来自**本次真实安装扫描**：
 
-- `installed`：扫描找到可运行的入口（与 S02 的 `installed` 状态同一证据，shim/残留不算）；
+- `installed`：扫描找到可运行的入口（与 `installed` 状态同一证据，shim/残留不算）；
 - `not-installed`：扫描覆盖了全部声明根（`scannedRoots > 0`、`unreadableRoots == 0`、
   `truncated == false`）且没有找到入口；
 - `undiscovered`：扫描不完整（无覆盖根、有不可读根或被截断）。**它不是「未安装」**，
@@ -113,7 +111,7 @@
 `conclusive` / `scannedAt`，界面据此显示「本次扫描不完整」并提供去安装页重新扫描的入口。
 
 **惰性登记不再是漏报理由**：刷新时若数据库里没有该产品的安装行，但扫描发现了真实安装，读取路径
-会先按 S02 同一身份规则登记该安装（`install_id` / `identity` / `identityKind` 与发现页一致），
+会先按发现模块的身份规则登记该安装（`install_id` / `identity` / `identityKind` 与发现页一致），
 再创建额度池；不再返回「未注册安装」。
 
 `outcomes[].reasonCode` 是稳定枚举，界面按 zh/en/ko 本地化；`reason` 保留后端原文作细节：
@@ -134,7 +132,7 @@
 
 ## 5. 自定义 CLI
 
-`CustomCliView` 是「可执行文件 + argv 数组 + 工作目录」的本地预设，复用 S04 参数链
+`CustomCliView` 是「可执行文件 + argv 数组 + 工作目录」的本地预设，复用托管终端参数链
 （`.exe` → MSVC quoting；`.cmd` → 转义 trampoline；`.ps1` → 单引号字面量 + pwsh 7.3+）。
 创建时拒绝：
 
@@ -142,7 +140,7 @@
 - `cmd.exe` / `powershell.exe` / `pwsh.exe` / `wscript.exe` / `cscript.exe` / `mshta.exe` /
   `rundll32.exe` / `regsvr32.exe` / `bash.exe` / `wsl.exe` / `sh.exe` / `conhost.exe` / `wt.exe`
   ——它们的参数会再次变成命令行；
-- `.cmd` 目标中含换行或 `"\` 的参数（S04 已在启动时拒绝，这里在创建时提前拒绝）；
+- `.cmd` 目标中含换行或 `"\` 的参数（启动时拒绝，这里在创建时提前拒绝）；
   解释器黑名单按**文件名**判定，因此改名后的 `cmd.exe` 副本不会被识别为 shell。
   它的参数仍然是 argv，不会经过 shell 解析，但这一点只保证"不拼命令行"，不保证
   "任意可执行文件都安全"——这是用户自己的本地导入；
@@ -155,12 +153,12 @@
 ## 6. 数据库（schema v7）
 
 新增 `usage_accounts`、`usage_pools`、`usage_snapshots`、`usage_samples`、
-`usage_provider_state`、`custom_clis`；不改动任何既有表。迁移为纯增量，不改 S01–S06 的
+`usage_provider_state`、`custom_clis`；不改动任何既有表。迁移为纯增量，不改已有的
 行 id 或外键；开迁前仍按既有机制做 `VACUUM INTO` 备份，事务失败回滚到 v6。数据库层用
 CHECK 固化三条规则：`confirmed` 账户必须有 fingerprint；`pool_key` 唯一；`usage_samples`
 的 `estimated` 只有 0/1 且百分比限制在 0–100。
 
-## 7. 转发器识别（R1）
+## 7. 转发器识别
 
 `.cmd`/`.bat`/`.ps1` shim 被当作**数据**读取（≤64 KiB），只展开 shim 自身目录变量。识别规则：
 
@@ -170,14 +168,7 @@ CHECK 固化三条规则：`confirmed` 账户必须有 fingerprint；`pool_key` 
 - `echo`、`Write-Output`、赋值、注释、标签、以及作为其他命令参数的路径都**不是**执行；
 - 不执行 shim、不做脚本求值、不拼命令行。识别不出就回落到 Node shim 解析，不猜。
 
-## 8. 未覆盖
+## 8. 覆盖与统计成功语义
 
-- 真实「离线」与真实 429 由代码路径与合成反例覆盖，未在本机触发真实网络断线。
-- Codex 多 bucket（`rateLimitsByLimitId`）按 schema 支持，本机只观察到一个 `codex` bucket。
-- Claude 转录的 token 语义来自本机真实记录；CodeBuddy 转录未被证实含 usage，因此不读。
-- R1 未取得：用量页与官方字段的**实窗**目视对照、真实 429/断网、真实自定义 CLI 表单全链；
-  本机仍只有 TRAE 一款扩展 CLI，第二个扩展产品的真实发现 + PTY 仍未完成。
-
-## S06主管收尾边界
-
-测量成功必须至少存在一个实际数值（百分比/金额/token分量），仅窗口长度/来源/全null样本不算成功，不清退避、不写lastSuccess；无值/partial不会把未知全局quota能力升级。日期未知的转录不能给今日/7天/30天的已测0，按已知分量保留累计并显示日期缺口。UI普通刷新遵守退避，skipped文案不猜原因；真实原因由outcome.reason提供。
+真实429、真实断网和多bucket场景仍缺充分样本。Codex官方额度与Claude本地转录统计的范围见COMPATIBILITY，其他产品没有可靠出口时为unsupported。
+测量成功至少有一个实际数值；只有窗口长度、来源或全null样本不算成功，不清退避、不写lastSuccess。日期未知的转录保留可知累计，不能显示日/周/月已测0。普通刷新遵守退避，真实原因由outcome.reason提供。

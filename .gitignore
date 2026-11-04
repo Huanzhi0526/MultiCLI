@@ -38,10 +38,22 @@ boardui.dev.env
 *.log
 /diagnostics/
 /installers/
-CLAUDE.md
 .codegraph
 .workflow
 .idea
 # Local verification artifacts (CI bundles, screenshots) — distribute via
 # CI artifact attachments or release assets, never the git history.
 artifacts/
+
+# Private machine context; shared instructions stay tracked
+CLAUDE.local.md
+.workbuddy/
+.codex/
+/scratch/
+/archive/
+/references/
+*.dmp
+*.db-journal
+*.exe
+*.msi
+*.zip

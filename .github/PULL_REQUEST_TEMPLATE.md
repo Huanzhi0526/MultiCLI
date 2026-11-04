@@ -1,18 +1,11 @@
-<!--
-Thanks for contributing! A bot check enforces the base-branch rule below,
-so getting this right up front saves a round trip.
--->
+## 变化
 
-## Base branch
+描述用户遇到的问题，以及修改后的行为。
 
-- **Feature / fix PRs** → target the **active development branch** (e.g. `v1.0.6`), NOT `main`.
-- **`main`** only receives release PRs cut by a maintainer from a `vX.Y.Z` branch.
-- Wrong base? Click **Edit** at the top of the PR and change it — no rebase needed in most cases.
+## 验证
 
-## Description
+写明实际运行的检查或观察结果；涉及Windows原生行为时注明环境，未跑的内容如实说明。
 
-<!-- What does this PR do? Link related issues. -->
+## 交接
 
-## Testing
-
-<!-- How did you verify this change? -->
+相关文档、剩余问题和下一步。不要附真实账号、凭据、完整会话、数据库或终端日志。

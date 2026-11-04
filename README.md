@@ -1,354 +1,55 @@
-> **MultiCLI 0.1.0 Beta 已完成 S00–S07 独立验收，提供本地未签名测试包；尚未公开发布 Release。** 请阅读 [MultiCLI 当前入口](README-MultiCLI.md)、[施工状态](docs/execution/STATUS.md)、[最终验收](docs/execution/S07-ACCEPTANCE.md)与[能力实测](COMPATIBILITY.md)。以下为固定上游原说明，其下载链接与更新渠道不适用于本项目。
+# MultiCLI 0.1.0
 
-<div align="center">
+Windows 本地多 CLI 工作台。在一个窗口中浏览工作区、Agent 与会话，搜索历史，使用托管终端和结构化对话，并查看具有可靠来源的用量数据。
 
-# Desktop CC GUI
+**当前版本：0.1.0，Windows 11 x64，用户级未签名安装包。** 项目已进入试用、功能迭代、体验优化、性能与运维维护阶段。
 
-<img width="120" alt="ccgui icon" src="./public/app-icon.png" />
+## 从哪里开始
 
-**English** · [简体中文](./README.zh-CN.md)
+| 你要做什么 | 阅读 |
+|---|---|
+| 安装和试用 | [快速上手](QUICKSTART.md) |
+| 接管维护、修 Bug 或做优化 | [项目交接](HANDOFF.md) |
+| Claude / Codex / 其他 Agent 开发 | [AGENTS.md](AGENTS.md)、[协作说明](CONTRIBUTING.md) |
+| 编译和运行 | [开发环境](docs/DEVELOPMENT.md) |
+| 备份、排错、升级和卸载 | [运维说明](docs/OPERATIONS.md) |
+| 支持哪些 CLI | [兼容性](COMPATIBILITY.md) |
+| 版本内容与限制 | [版本记录](CHANGELOG.md)、[已知限制](docs/KNOWN-LIMITATIONS.md) |
 
-<a href="https://trendshift.io/repositories/25546" target="_blank"><img src="https://trendshift.io/api/badge/repositories/25546" alt="zhukunpenglinyutong%2Fdesktop-cc-gui | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-<a href="https://atomgit.com/zhukunpenglinyutong/desktop-cc-gui" target="_blank"><img src="https://atomgit.com/zhukunpenglinyutong/desktop-cc-gui/star/new_badge.svg" alt="AtomGit G-Star" width="250" height="54"/></a>
+## 当前能力
 
-![][github-contributors-shield] ![][github-forks-shield] ![][github-stars-shield] ![][github-issues-shield] ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-c4f042?labelColor=black&style=flat-square)
+- 工作区与 Agent 双向导航，访问同一份会话和消息。
+- 只读索引与搜索 Codex、Claude、CodeBuddy 的已观察历史格式。
+- 发现本机 CLI 安装与外部进程；外部进程只读观察。
+- 多个自有 ConPTY / xterm 终端，中文输入、托盘后台运行与明确退出。
+- 三核心结构化新建、权限处理、工具事件、取消和同会话继续。
+- Codex 官方额度读取、Claude 本地转录 token；无可靠出口的产品明确显示未知或不支持。
+- 自定义 CLI、当前 profile 的备份恢复和白名单诊断导出。
 
-</div>
+模型请求仍使用各 CLI 自己的服务与登录。MultiCLI 没有自己的远程控制、遥测、云同步或自动更新服务。不同产品和版本的实际覆盖见兼容性表。
 
-**ccgui** is an open-source **multi-engine AI coding desktop client**. In plain words: it brings command-line AI coding runtimes — **Claude Code**, **Codex CLI**, **Kimi CLI**, **Grok CLI**, **Pi CLI**, **OMP CLI**, **DeepSeek Harness (DSH)**, **Antigravity**, **OpenCode**, **Qoder**, and **MiniMax Code** — into one graphical interface.
-
-No more staring at a black terminal. Open ccgui, pick a project, and chat with AI to write code, fix bugs, and commit to Git. Streaming output, thinking traces, and tool calls are visible as they happen; token usage appears when the engine reports it.
-
-The app is built with **Tauri 2 + React 18 + TypeScript + Rust** and runs on macOS, Windows, and Linux. Settings and state are persisted locally. Content sent to an AI provider follows the boundary of the channel you configured for that CLI.
-
----
-
-## Supported engines
-
-Every engine below is wired in through a **dedicated protocol adapter** in the Rust backend — streaming events, session history, and provider channels are handled natively, not scraped off a terminal screen.
-
-<p>
-  <a href="https://code.claude.com/docs/en/cli-reference"><kbd><img src="https://www.google.com/s2/favicons?domain=anthropic.com&sz=64" alt="Claude Code logo" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
-  <a href="https://github.com/openai/codex"><kbd><img src="https://www.google.com/s2/favicons?domain=openai.com&sz=64" alt="Codex CLI logo" width="16" valign="middle" /> Codex CLI</kbd></a> &nbsp;
-  <a href="https://www.kimi.com/code/docs/en/"><kbd><img src="https://www.google.com/s2/favicons?domain=moonshot.cn&sz=64" alt="Kimi CLI logo" width="16" valign="middle" /> Kimi CLI</kbd></a> &nbsp;
-  <a href="https://x.ai/cli"><kbd><img src="https://www.google.com/s2/favicons?domain=x.ai&sz=64" alt="Grok CLI logo" width="16" valign="middle" /> Grok CLI</kbd></a> &nbsp;
-  <a href="https://pi.dev"><kbd><img src="https://pi.dev/favicon.svg" alt="Pi CLI logo" width="16" valign="middle" /> Pi CLI</kbd></a> &nbsp;
-  <a href="https://omp.sh"><kbd><img src="https://omp.sh/favicon.svg" alt="oh-my-pi logo" width="16" valign="middle" /> OMP CLI</kbd></a> &nbsp;
-  <a href="https://github.com/deepseek-ai/dsh"><kbd><img src="https://www.google.com/s2/favicons?domain=deepseek.com&sz=64" alt="DeepSeek Harness logo" width="16" valign="middle" /> DeepSeek Harness</kbd></a> &nbsp;
-  <a href="https://www.antigravity.google/docs/cli/headless/"><kbd><img src="https://www.google.com/s2/favicons?domain=antigravity.google&sz=64" alt="Antigravity logo" width="16" valign="middle" /> Antigravity</kbd></a> &nbsp;
-  <a href="https://opencode.ai/docs/"><kbd><img src="https://www.google.com/s2/favicons?domain=opencode.ai&sz=64" alt="OpenCode logo" width="16" valign="middle" /> OpenCode</kbd></a> &nbsp;
-  <a href="https://docs.qoder.com/en/cli/using-cli"><kbd><img src="https://www.google.com/s2/favicons?domain=qoder.com&sz=64" alt="Qoder logo" width="16" valign="middle" /> Qoder</kbd></a> &nbsp;
-  <a href="https://agent.minimax.cn/docs/cli/quick-start"><kbd><img src="./src/assets/model-icons/minimax-code.png" alt="MiniMax Code logo" width="16" valign="middle" /> MiniMax Code</kbd></a>
-</p>
-
-### Feature compatibility matrix
-
-Legend: ✅ Supported · ⚠️ Partial · ❌ Not yet supported · 🔁 Not supported by the CLI, but ccgui has a GUI equivalent · ➖ N/A
-
-| Feature | <kbd><img src="https://www.google.com/s2/favicons?domain=anthropic.com&sz=64" width="16" valign="middle" /> Claude Code</kbd> | <kbd><img src="https://www.google.com/s2/favicons?domain=openai.com&sz=64" width="16" valign="middle" /> Codex CLI</kbd> | <kbd><img src="https://www.google.com/s2/favicons?domain=moonshot.cn&sz=64" width="16" valign="middle" /> Kimi CLI</kbd> | <kbd><img src="https://www.google.com/s2/favicons?domain=x.ai&sz=64" width="16" valign="middle" /> Grok CLI</kbd> | <kbd><img src="https://pi.dev/favicon.svg" width="16" valign="middle" /> Pi CLI</kbd> | <kbd><img src="https://omp.sh/favicon.svg" width="16" valign="middle" /> OMP CLI</kbd> | <kbd><img src="https://www.google.com/s2/favicons?domain=deepseek.com&sz=64" width="16" valign="middle" /> DSH</kbd> | <kbd><img src="https://www.google.com/s2/favicons?domain=antigravity.google&sz=64" width="16" valign="middle" /> Antigravity</kbd> | <kbd><img src="https://www.google.com/s2/favicons?domain=opencode.ai&sz=64" width="16" valign="middle" /> OpenCode</kbd> | <kbd><img src="https://www.google.com/s2/favicons?domain=qoder.com&sz=64" width="16" valign="middle" /> Qoder (Global/CN)</kbd> | <kbd><img src="./src/assets/model-icons/minimax-code.png" width="16" valign="middle" /> MiniMax Code</kbd> |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Streaming output (per-token) | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Session history & resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Interrupt (Stop) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Message queue | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Image attachments | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ |
-| Permission modes | auto·manual·plan·bypass | auto·manual·bypass | auto·plan·bypass | bypass only | auto only | auto·plan·bypass | auto only | auto·plan·bypass | auto·plan | bypass only | auto·manual·plan·bypass |
-| Model picker | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Reasoning effort | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ⚠️ | ❌ | ✅ | ⚠️ |
-| Token usage & context window | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ |
-| Todo list rendering | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Sub-agent display (dispatch panel) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ | ❌ |
-| Team mode (multi-agent orchestration) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| `/` slash commands & skills (picker) | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ❌ | ⚠️ | ⚠️ | ❌ |
-| `@` file mentions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Provider/channel switching | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ❌ |
-| CC Switch import | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Fast mode (service tier) | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Session rename | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Native command `/new` (new session) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Native command `/clear` (clear context) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Native command `/compact` (compact context) | ✅ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ✅ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
-| Native command `ask` (question cards) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ | ✅ |
-| Native command `/mcp` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Native command `/plugins` | ➖ | ➖ | ➖ | ➖ | ❌ | ✅ | ➖ | ➖ | ➖ | ➖ | ➖ |
-| Native command `/goal` (persistent goal) | ➖ | ➖ | ➖ | ➖ | ➖ | ❌ | ➖ | ➖ | ➖ | ➖ | ➖ |
-
-Kimi question cards use the local CLI's ACP form channel (verified with Kimi 2.0.2), including multiple questions, multiple selections, dismissal, and interruption. Kimi currently accepts declared options only, so these cards do not offer a free-text “Other” answer. WSL workspaces retain the non-interactive CLI fallback and do not support Kimi question cards or plan mode; prompt-mode launches never add incompatible interactive permission flags.
-
-MiniMax Code (command `mcode`) runs through its native ACP transport (`mcode acp`): per-token streaming, permission question cards (ACP `session/request_permission`), and session resume are wired natively and verified against mcode 0.5.1. The model picker is probed live from the session handshake, so providers you add to mcode itself (e.g. a GLM channel) appear automatically. mcode's ACP does not accept inline image blocks, so pictures travel as absolute file paths the agent reads with its own tools. Reasoning effort folds into mcode's model variants rather than a separate knob. WSL workspaces fall back to the headless `mcode exec --output-format stream-json` child (auto/bypass only there — no question cards or plan mode). Provider channels and the app's MCP/Skills sync do not cover this engine yet; sign in with `mcode login`.
-
----
-## What can ccgui do?
-
-### One client, eleven AI engines
-
-- Registers runtime adapters for **Claude Code**, **Codex CLI**, **Kimi CLI**, **Grok CLI**, **Pi CLI**, **OMP CLI**, **DeepSeek Harness**, **Antigravity**, **OpenCode**, **Qoder** (global and CN distributions), and **MiniMax Code** — pick the engine per session from the composer.
-- **Provider channels** are written to each CLI's own native config files (no parallel credential store), with curated presets for GLM, Kimi, DeepSeek, MiniMax, MiMo, Bailian, LongCat, OpenCode Go, OpenRouter, Requesty, [API Route](https://www.api-route.com), and more. Claude / Codex / Grok channels can be imported from [CC Switch](https://github.com/farion1231/cc-switch).
-
-  To use API Route, create an API key in its dashboard and select the **API Route** preset in Settings for Claude or Codex. Claude uses the Anthropic-compatible root endpoint; Codex uses `/v1` with the Responses protocol. Adjust the preset's model names to models available to your key; see the [API Route setup guide](https://www.api-route.com/docs/quickstart).
-- Pi-family engines (Pi / OMP) support API-key and OAuth sign-in flows from inside Settings.
-- Per-tab **model and effort overrides**: different tabs in the same window can run different models or thinking levels.
-- Session history survives restarts; the history scanner reads each CLI's native session files and keeps titles in sync.
-
-### A chat box designed for coding
-
-- Streaming replies are revealed per animation frame with cached syntax highlighting — long outputs stay smooth instead of re-parsing markdown on every token.
-- **Thinking streams** merge with the reply text, auto-fold when they settle, and expand to full text on demand.
-- Tool calls show as live rows with expandable parameters and results, including beautified **Git Diff** and **Bash** viewers and per-run completion metadata.
-- A **Run Status Strip** mirrors the engine's live progress (including todo snapshots), and a message **anchor rail** lets you jump between user messages.
-- Pasted images become attachments; file mentions are backed by a `.gitignore`-aware project file index; file links in replies handle URL-encoded paths and have a right-click menu.
-- Permission denials can be resolved inline by granting the engine extra directories; prompt history and an optional **Codex Fast** toggle live in the composer.
-
-### Not just chat — a full set of dev panels
-
-- **File tree**: virtualized, with Git status colors, nested-repository badges, context menus, and drag-and-drop — plus a built-in CodeMirror editor pane with Markdown preview.
-- **Built-in terminal**: a real PTY-backed terminal dock (xterm + WebGL), no need to switch windows.
-- **Git panel**: stage, commit, search branches, inspect diffs and history.
-- **Command palette**: one keyboard-driven box for the app's commands.
-
-### Plugin system
-
-- First-party **plugin SDK** (`@ccgui/plugin-sdk`) plus an in-app runtime, manager UI, and trust boundary.
-- **Declarative plugins** can add settings sections and config-driven UI without shipping frontend code; builtin app surfaces (including the settings page itself) are registered through the same extension points.
-- See [docs/plugin-development-guide.zh-CN.md](./docs/plugin-development-guide.zh-CN.md) for the full authoring guide.
-
-### Settings, network, and updates
-
-- **Proxy settings** for the app and engine traffic.
-- **LAN web access**: serve the UI to other devices on your network over a token-authenticated WebSocket bridge, with a QR-code entry in Settings.
-- **Workspace management**: group projects and switch between them.
-- In-app **auto-update** (Tauri updater against GitHub Releases), a changelog dialog, and signed macOS builds.
-- Multilingual UI: **Chinese, English and Korean**.
-
----
-
-## Download
-
-Grab the installer for your platform from the [Releases page](https://github.com/zhukunpenglinyutong/desktop-cc-gui/releases):
-
-| Platform | Installer |
-| --- | --- |
-| macOS (Apple Silicon, signed) | `aarch64.dmg` |
-| Windows | `.exe` (NSIS) |
-| Linux | `.AppImage`, `.rpm` |
-
-The `.rpm` is zstd-compressed and requires rpm ≥ 4.14 (Fedora 28+, RHEL 8+); on older rpm-based systems use the AppImage instead.
-
-After installing, open Settings, configure a provider channel for the CLI you want (or sign in), add a project folder, and start chatting.
-
-### Using DeepSeek Harness (DSH)
-
-1. Install the DSH CLI on your machine and configure its models and API keys in DSH itself — not as a separate vendor preset inside ccgui.
-2. In Settings → DeepSeek Harness, ccgui can adopt a running local `dsh web` host or auto-start one.
-3. Select **DeepSeek Harness** in the composer engine picker. Chat runs through DSH's headless profile; models and credentials stay in DSH.
-4. Image attachments (paste, pick, or drop) are supported. For custom providers added in DSH (`llm-pi-ai` routes), ccgui declares image input on the route before sending — no manual DSH settings edit needed; official adapters report their own capabilities.
-
----
-
-## Getting it running (setup guide)
-
-Want to build it yourself or contribute? Three steps.
-
-### Step 1: Prepare your environment
-
-| Tool | Version | What for |
-| --- | --- | --- |
-| [Node.js](https://nodejs.org/) | 22.13 or newer | Runs the frontend toolchain (building alone works on 20+; `pnpm test` needs 22.13+) |
-| [pnpm](https://pnpm.io/) | 10 (pinned via `packageManager`) | Installs dependencies |
-| [Rust](https://rustup.rs/) | stable (install via rustup) | Compiles the backend |
-
-Each OS also needs the standard Tauri prerequisites — see the [official Tauri guide](https://v2.tauri.app/start/prerequisites/):
-
-- **macOS**: `xcode-select --install`.
-- **Windows**: Microsoft C++ Build Tools and WebView2 (Windows 11 ships with WebView2).
-- **Linux**: `webkit2gtk` and friends — copy the commands from the Tauri docs.
-
-### Step 2: Install dependencies
-
-```bash
-git clone https://github.com/zhukunpenglinyutong/desktop-cc-gui.git
-cd desktop-cc-gui
-pnpm install
-```
-
-Note: this is a **pnpm workspace** (the plugin SDK lives in `packages/plugin-sdk`); the lockfile is `pnpm-lock.yaml`.
-
-### Step 3: Start it
-
-```bash
-pnpm dev
-```
-
-A few tips:
-
-- **The first launch compiles the entire Rust backend and can take a few minutes** — go grab a coffee. Later launches use incremental builds and are fast.
-- The frontend dev server runs on port `1420`.
-
-### Building installers
-
-```bash
-pnpm build:mac                 # macOS signed build (scripts/build-signed-macos.sh)
-pnpm build:mac:skip-notarize   # same, skipping notarization
-```
-
-Windows and Linux installers are produced by the CI workflows under `.github/workflows/` (`release.yml`, `build-windows-artifact.yml`).
-
----
-
-## How to work on the code (development guide)
-
-### Tech stack at a glance
-
-| Part | Technology |
-| --- | --- |
-| UI | React 18 + TypeScript + Tailwind CSS 4 + zustand |
-| Build | Vite 6 |
-| Desktop shell | Tauri 2 (Rust backend: git2, rusqlite, portable-pty, axum) |
-| Tests | Vitest + node:test (frontend) + cargo test (Rust) |
-
-### Directory layout
+## 仓库结构
 
 ```text
-desktop-cc-gui/
-├── src/                    # Frontend code
-│   ├── features/           # ★ Feature modules: chat / files / git / terminal /
-│   │                       #   settings / plugins / commands / update / open-app
-│   ├── components/         # Shared UI components (incl. engine brand icons)
-│   ├── i18n/               # zh + en + ko locale bundles
-│   ├── styles/             # Global styles
-│   └── lib/ utils/         # Utility functions
-├── src-tauri/              # Rust backend
-│   └── src/                # engine/ (one module per CLI), history/, plugins/,
-│                           # git.rs, terminal.rs, web.rs (LAN bridge), ...
-├── packages/plugin-sdk/    # @ccgui/plugin-sdk — plugin authoring kit
-├── tests/                  # node:test regression suites + browser/ verification pages
-├── scripts/                # Build and packaging scripts
-└── docs/                   # Plugin development guide, engine mode notes
+HANDOFF.md / STATUS.md       当前维护交接和状态
+AGENTS.md / CLAUDE.md        Agent 入口
+src/multicli/                当前产品 React 界面
+src-tauri/src/multicli/      Rust 领域与运行时
+src-tauri/src/multicli_bootstrap.rs  当前启动、IPC、托盘和退出
+docs/                       架构、开发、运维、性能和技术契约
+.github/workflows/          Windows 构建与检查
 ```
 
-### The typical workflow for changing a feature
+其他继承自上游的源码不代表已在 MultiCLI 中启用。产品启动边界见架构说明。
 
-1. **UI-only change**: find the matching module under `src/features/` and edit there. New components live inside that feature's own folder.
-2. **Needs backend support**: add a `#[tauri::command]` in the matching `src-tauri/src/` module and call it from the frontend via the Tauri API.
-3. **Changed any UI text**: route it through i18n and keep all three bundles (`src/i18n/zh.ts`, `src/i18n/en.ts`, `src/i18n/ko.ts`) synchronized — hardcoded UI text is not allowed.
+## 源码与安装包
 
-### Everyday commands
+正式源码：<https://github.com/Huanzhi0526/MultiCLI>。本项目的版本标签使用 `multicli-v0.1.0`，与继承的上游标签区分。
+安装包可从已成功的 GitHub Actions 构建下载；包仍未签名。当前本机验证过的安装包及摘要见 [0.1.0 版本基线](docs/releases/0.1.0.md)。
 
-| Command | What it does |
-| --- | --- |
-| `pnpm dev` | Start the full app (Tauri dev mode) |
-| `pnpm build` | TypeScript check + frontend production build |
-| `pnpm test` | Run the `node:test` suites under `tests/`, then the Vitest suite |
-| `pnpm test:node` | Run only the `node:test` suites under `tests/` |
-| `pnpm preview` | Preview the production frontend build |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust tests |
+提交源码、锁文件、文档和构建脚本即可协作。不要上传 node_modules、target、真实历史、数据库、终端日志、凭据或本机工具缓存。
 
-### Writing tests
+## 来源与许可证
 
-- Frontend unit tests use [Vitest](https://vitest.dev/) — colocated `xxx.test.ts(x)` files next to the source. Heavier suites live in `tests/*.test.ts` and use Node's built-in `node:test` (`pnpm test:node`; `pnpm test` runs them first).
-- Rust tests live in their modules as usual and run with `cargo test --manifest-path src-tauri/Cargo.toml`.
-
----
-
-## Coding rules
-
-Not many rules, but each exists for a reason:
-
-1. **Run the big three before opening a PR**: `pnpm build` (typecheck) and `pnpm test` green locally, plus `cargo test` if you touched Rust.
-2. **UI text must go through i18n**: every user-visible string comes from `src/i18n/`, and all three shipped locale bundles (zh, en, ko) must stay synchronized.
-3. **Keep components close to home**: new components start inside their own feature folder; promote to `src/components/` only once they're genuinely reused across features.
-4. **TypeScript strict**: don't paper over things with `any`; write real types.
-5. **Extend through the plugin SDK where possible**: new settings sections and surfaces should register through the same extension points the builtin ones use.
-6. **Never commit secrets**: API keys and tokens must never appear in code or commit history.
-
-### Writing commit messages
-
-Use [Conventional Commits](https://www.conventionalcommits.org/) with a Chinese action phrase by default: `type(scope): 中文动宾短句`.
-
-| type | When to use |
-| --- | --- |
-| `feat` | New feature |
-| `fix` | Bug fix |
-| `refactor` | Refactoring (no behavior change) |
-| `docs` | Documentation |
-| `test` | Adding/updating tests |
-| `chore` | Housekeeping (version bumps, deps, scripts) |
-| `perf` / `style` / `ci` | Performance / formatting / CI |
-
-Real examples from this repo:
-
-```text
-feat(chat): 支持工具调用参数与结果展开、Git Diff/Bash美化及完成元数据展示
-fix(codex): Windows .cmd shim 下多行提示词只送达第一行
-perf(chat): reveal streamed text per frame without reparsing markdown
-```
-
-No emoji in commit messages, and no AI-generated signatures.
-
----
-
-## Submitting your code (contribution flow)
-
-1. **Fork** the repo and clone it locally.
-2. Branch off the **`vX.Y.Z` development branch** with the highest version number, named like `feat/xxx` or `fix/xxx`.
-3. Make your changes and get `pnpm build` + `pnpm test` green locally.
-4. Open a PR against that **`vX.Y.Z` branch** (not `main`, which only receives release merges). Title in commit format; in the description, explain what changed, why, and how you verified it.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full branch rules, checks and PR expectations, and [SECURITY.md](SECURITY.md) for reporting security issues privately.
-
-Not sure where to start? Browse the [Issues](https://github.com/zhukunpenglinyutong/desktop-cc-gui/issues) and pick one that interests you. Found a bug or have an idea? Open an issue and let's talk.
-
-### Want to dig deeper?
-
-- [Plugin development guide (中文)](docs/plugin-development-guide.zh-CN.md) — SDK, manifest, permissions, and the trust boundary.
-- [UI/UX spec (中文)](docs/ui-ux-spec.zh-CN.md) — design tokens, states, action feedback, and the refresh-button inventory.
-- [docs/omp-fast-mode.md](docs/omp-fast-mode.md) — notes on the Codex Fast / OMP fast mode.
-
----
-
-## License
-
-[MIT](https://github.com/zhukunpenglinyutong/desktop-cc-gui?tab=MIT-1-ov-file)
-
----
-
-## Friendship Link
-
-Thanks for the support and feedback from the friends at [LINUX DO](https://linux.do/).
-
-[AtomGit](https://atomgit.com/zhukunpenglinyutong/desktop-cc-gui): hosts this project in China, helping users in mainland China access the project and download Releases faster.
-
-Thank you for [AtomGit](https://atomgit.com/zhukunpenglinyutong/desktop-cc-gui) platform G-Star certification
-
----
-
-## Contributors
-
-Thanks to all the contributors who help make ccgui better.
-
-<a href="https://github.com/zhukunpenglinyutong/desktop-cc-gui/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=zhukunpenglinyutong/desktop-cc-gui" alt="Contributors" />
-</a>
-
----
-
-## Acknowledgements
-
-This project originally started from [CodexMonitor](https://github.com/Dimillian/CodexMonitor). Since v1.0.0 the codebase has been rewritten from scratch — no CodexMonitor code remains, but the original inspiration is gratefully acknowledged.
-
-The local usage statistics and subscription limit lookup (used by the Usage & Limits plugin) reference [TokenTracker](https://github.com/xiufengsun/tokentracker) (MIT), and the bundled model price table is derived from [LiteLLM](https://github.com/BerriAI/litellm) (MIT). See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
-
----
-
-## Star History
-
-[![Star History Chart](https://star-history.dera.page/svg?repos=zhukunpenglinyutong/desktop-cc-gui&type=date&legend=top-left)](https://star-history.dera.page/#zhukunpenglinyutong/desktop-cc-gui&type=date&legend=top-left)
-
-<!-- LINK GROUP -->
-
-[github-contributors-shield]: https://img.shields.io/github/contributors/zhukunpenglinyutong/desktop-cc-gui?color=c4f042&labelColor=black&style=flat-square
-[github-forks-shield]: https://img.shields.io/github/forks/zhukunpenglinyutong/desktop-cc-gui?color=8ae8ff&labelColor=black&style=flat-square
-[github-issues-link]: https://github.com/zhukunpenglinyutong/desktop-cc-gui/issues
-[github-issues-shield]: https://img.shields.io/github/issues/zhukunpenglinyutong/desktop-cc-gui?color=ff80eb&labelColor=black&style=flat-square
-[github-license-link]: https://github.com/zhukunpenglinyutong/desktop-cc-gui/blob/main/LICENSE
-[github-stars-shield]: https://img.shields.io/github/stars/zhukunpenglinyutong/desktop-cc-gui?color=ffcb47&labelColor=black&style=flat-square
+派生自 [Desktop CC GUI](https://github.com/zhukunpenglinyutong/desktop-cc-gui) 固定提交 `6c46345a727e7c1b57e0dacecb4fe063d88ee8dc`，保留上游 Git 历史与 MIT 版权。
+参见 [LICENSE](LICENSE)、[第三方来源](THIRD_PARTY.md) 与 [继承范围](docs/UPSTREAM.md)。

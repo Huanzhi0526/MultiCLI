@@ -1,3 +1,5 @@
+> 上游历史技术参考：来自保留的Desktop CC GUI资料，不是当前MultiCLI功能声明或工作计划。当前入口见仓库README与HANDOFF。
+
 # CC GUI 插件开发与提交规范
 
 > **版本**：v0.1（规范草案，随插件系统 Phase 1 落地生效）

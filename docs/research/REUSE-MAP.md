@@ -1,8 +1,12 @@
 # 来源追踪
 
-| 目标 | 来源 | 固定 commit | 用途与修改 |
-|---|---|---|---|
-| app/ 上游继承树（不含新增 MultiCLI 文件与用户方案） | https://github.com/zhukunpenglinyutong/desktop-cc-gui | 6c46345a727e7c1b57e0dacecb4fe063d88ee8dc | 完整 Git 派生；保留 MIT LICENSE 和原版权。S00 修改启动、数据目录、身份、构建配置；git diff 可逐文件追溯 |
-| src-tauri/src/multicli_bootstrap.rs、src/multicli/、scripts/multicli/、docs/contracts/ | 本项目新增 | 本次 S00 提交待验收 | 本地脚手架/契约，不来源于其他参考仓库 |
+| 目标 | 来源与用途 |
+|---|---|
+| 原继承源码、资源和模块 | Desktop CC GUI固定提交6c46345a727e7c1b57e0dacecb4fe063d88ee8dc；保留MIT LICENSE、原版权和Git历史 |
+| src/multicli、Rust multicli、multicli_bootstrap、产品契约与维护文档 | 本项目新增或在既有集成边界独立实现，可通过相对固定上游的Git diff追溯 |
+| 当前独立图标 | 本项目public/multicli.svg及src-tauri/multicli-icons，不沿用上游应用标识 |
+| 其他参考仓库 | references.lock.json中的固定只读参考；当前没有据此声明额外代码移植 |
 
-其余五个参考目前仅阅读，没有代码移植。后续任何复制需逐目标文件增加来源 commit、原路径及修改摘要。上游图标不会作为 MultiCLI 最终品牌资产发布；第三方字体/图标许可在依赖声明中单独核对。
+后续复制第三方代码时记录来源URL、固定commit、原路径、用途和许可证；不要把“阅读参考”说成已经集成。
+依赖许可元数据见dependency-licenses.json，它不代替完整分发许可文本或NOTICE审查。
+上游版本说明的原始内容保留在Git历史及用户本地归档；本产品内置版本记录现为MultiCLI0.1.0。

@@ -1,0 +1,16 @@
+name: 功能或优化建议
+description: 描述实际场景，便于确定后续功能、体验或性能目标。
+title: '[Idea] '
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: 使用场景与问题
+      description: 当前在哪一步遇到困难，希望怎样改善？
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 期望结果与范围
+      description: 如果是性能问题，请补充数据规模、设备和可分享的现象。

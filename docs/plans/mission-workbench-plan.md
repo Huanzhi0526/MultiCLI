@@ -1,3 +1,5 @@
+> 上游历史技术参考：来自保留的Desktop CC GUI资料，不是当前MultiCLI功能声明或工作计划。当前入口见仓库README与HANDOFF。
+
 # 任务工作台（Mission Workbench）执行方案
 
 > 来源：Codex 会话 `01a0c7e5-0761-7130-8f6b-2c3e508c4a13`（2026-09-22）的讨论结论整理。

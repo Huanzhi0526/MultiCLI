@@ -1,3 +1,5 @@
+> 上游历史技术参考：来自保留的Desktop CC GUI资料，不是当前MultiCLI功能声明或工作计划。当前入口见仓库README与HANDOFF。
+
 # PR #1396 登录 shell 密钥注入：评审整改记录
 
 日期：2026-10-29。对应 [PR #1396](https://github.com/zhukunpenglinyutong/desktop-cc-gui/pull/1396) 及[维护者评审](https://github.com/zhukunpenglinyutong/desktop-cc-gui/pull/1396#pullrequestreview-5681823365)。整改基线：`bc23836f4`。

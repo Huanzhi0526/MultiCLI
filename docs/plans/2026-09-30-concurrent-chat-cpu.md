@@ -1,3 +1,5 @@
+> 上游历史技术参考：来自保留的Desktop CC GUI资料，不是当前MultiCLI功能声明或工作计划。当前入口见仓库README与HANDOFF。
+
 # 多会话并行 CPU 排查与修复
 
 ## 结论与边界

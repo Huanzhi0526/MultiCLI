@@ -1,13 +1,15 @@
-# 三核心历史格式核对（S03）
+# 历史格式技术样本（2026-11-02）
 
 核对日期：2026-11-02（Asia/Shanghai）。核对对象是本机实际安装并实际产生过会话的三款
-CLI；版本来自 S02 已验证的 `--version` 探测：
+CLI；当时版本来自已观察的 `--version` 探测：
 
 | 产品 | 探测版本 | 历史根（相对 `%USERPROFILE%`） |
 |---|---|---|
 | Codex CLI | 0.166.0 | `.codex\sessions` |
 | Claude Code | 2.1.153 | `.claude\projects` |
 | CodeBuddy Code | 2.179.0 | `.codebuddy\projects` |
+
+本文件是保留的格式样本，不表示这些CLI版本仍为当前安装；当前产品覆盖以COMPATIBILITY.md为准。
 
 本文件只记录**实际观察到的结构**。没有把上游 README、旧版解析器或另一产品的字段当成
 兼容性保证。真实正文、账号、路径与凭据不进入本文件、fixture 或 Git。
@@ -27,7 +29,7 @@ CLI；版本来自 S02 已验证的 `--version` 探测：
 - `projects\<project-slug>\<session-uuid>.jsonl`
 - `projects\<project-slug>\memory\*.md` 是记忆文档，不是会话记录，不导入。
 - 也观察到 `projects\<project-slug>\<session-uuid>\subagents\agent-*.jsonl`：子代理记录。
-  本阶段按普通 JSONL 导入，`isSidechain` 写入消息内容，不另造会话。
+  按普通JSONL导入，`isSidechain` 写入消息内容，不另造会话。
 
 ### CodeBuddy Code
 
@@ -144,7 +146,7 @@ CLI；版本来自 S02 已验证的 `--version` 探测：
 |---|---|---|
 | Codex | `world_state`、`turn_context`、`token_usage_record`、`compacted` 的替换历史 | 上下文/计费不展示；不影响消息时间线 |
 | Codex | `response_item.reasoning.encrypted_content` | 只标记存在，不展示密文 |
-| Codex | `event_msg.token_count` | 用量留给 S06，避免把 token 当订阅余额 |
+| Codex | `event_msg.token_count` | 用量由usage模块处理，避免把token当订阅余额 |
 | Claude | `file-history-snapshot`、`mode`、`permission-mode`、`last-prompt`、`queue-operation` | 编辑器状态不展示 |
 | Claude | `attachment` 的文件内容 | 只保留 `[image]` 等类型名 |
 | Claude | `system` 的 `compactMetadata` / `usage` | 只保留 subtype 与文本 |

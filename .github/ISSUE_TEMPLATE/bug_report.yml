@@ -1,0 +1,23 @@
+name: 使用问题
+description: 记录可复现的问题，供本机或其他设备的维护者定位。
+title: '[Bug] '
+body:
+  - type: input
+    id: version
+    attributes:
+      label: MultiCLI与相关CLI版本
+      placeholder: MultiCLI 0.1.0；CodeBuddy等产品的实际版本
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      placeholder: Windows版本、安装包或开发模式
+  - type: textarea
+    id: steps
+    attributes:
+      label: 操作、期望与实际结果
+      description: 提供重现步骤和可分享的错误摘要。请勿上传凭据、真实会话正文、数据库或终端日志。
+    validations:
+      required: true

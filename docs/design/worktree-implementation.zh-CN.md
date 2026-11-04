@@ -1,3 +1,5 @@
+> 上游历史技术参考：来自保留的Desktop CC GUI资料，不是当前MultiCLI功能声明或工作计划。当前入口见仓库README与HANDOFF。
+
 # Worktree 功能实现文档
 
 > **状态**：待实施 · 设计稿已通过评审（`docs/design/worktree-mockup.html`）

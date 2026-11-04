@@ -6,7 +6,7 @@
 //! run, and that a tool nobody was asked about is never reported as denied.
 //!
 //! Real CLI evidence lives in `scratch/S05/` and is quoted in
-//! `docs/execution/deliveries/S05.md`; a fixture here is never reported as live.
+//! `docs/contracts/runtime-v1.md`; a fixture here is never reported as live.
 
 use std::sync::Arc;
 use std::time::Duration;

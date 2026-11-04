@@ -98,6 +98,10 @@ impl DetectedInstallation {
 #[derive(Debug, Clone, Default)]
 pub struct ScannerEnvironment {
     pub path_dirs: Vec<PathBuf>,
+    /// The process PATH had more than `MAX_PATH_DIRECTORIES` entries before it
+    /// was bounded. The skipped entries are real evidence and must keep the
+    /// scan inconclusive.
+    pub path_truncated: bool,
     pub user_profile: Option<PathBuf>,
     pub local_app_data: Option<PathBuf>,
     pub app_data: Option<PathBuf>,
@@ -106,15 +110,14 @@ pub struct ScannerEnvironment {
 
 impl ScannerEnvironment {
     pub fn from_process_env() -> Self {
-        let path_dirs = std::env::var_os("PATH")
-            .map(|value| {
-                std::env::split_paths(&value)
-                    .take(MAX_PATH_DIRECTORIES)
-                    .collect()
-            })
+        let all_dirs = std::env::var_os("PATH")
+            .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
             .unwrap_or_default();
+        let path_truncated = all_dirs.len() > MAX_PATH_DIRECTORIES;
+        let path_dirs = all_dirs.into_iter().take(MAX_PATH_DIRECTORIES).collect();
         Self {
             path_dirs,
+            path_truncated,
             user_profile: std::env::var_os("USERPROFILE").map(PathBuf::from),
             local_app_data: std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
             app_data: std::env::var_os("APPDATA").map(PathBuf::from),
@@ -156,9 +159,14 @@ pub fn scan_installations(
     let mut scan = InstallationScan::default();
     let mut roots: Vec<RootCandidate> = Vec::new();
     let mut seen_roots = std::collections::BTreeSet::new();
+    if environment.path_truncated || environment.path_dirs.len() > MAX_PATH_DIRECTORIES {
+        // The process environment (or the caller) had more PATH entries than
+        // this bounded scan can cover; a missing product is not proof.
+        scan.truncated = true;
+    }
 
     for directory in environment.path_dirs.iter().take(MAX_PATH_DIRECTORIES) {
-        let key = normalize_key(&directory.to_string_lossy());
+        let key = path_key(directory);
         if seen_roots.insert(key) {
             roots.push(RootCandidate {
                 directory: directory.clone(),
@@ -179,8 +187,12 @@ pub fn scan_installations(
             } else {
                 base.join(root.relative)
             };
-            let key = normalize_key(&directory.to_string_lossy());
+            let key = path_key(&directory);
             if seen_roots.insert(key) {
+                if roots.len() >= MAX_INSTALL_ROOTS {
+                    scan.truncated = true;
+                    break;
+                }
                 roots.push(RootCandidate {
                     directory,
                     source: match root.kind {
@@ -191,10 +203,6 @@ pub fn scan_installations(
                         InstallRootKind::Path => "path",
                     },
                 });
-            }
-            if roots.len() >= MAX_INSTALL_ROOTS {
-                scan.truncated = true;
-                break;
             }
         }
     }
@@ -213,9 +221,28 @@ pub fn scan_installations(
                 continue;
             }
         };
-        for entry in entries.flatten().take(MAX_ENTRIES_PER_DIRECTORY) {
+        let mut entries_seen = 0usize;
+        for entry in entries {
+            if entries_seen >= MAX_ENTRIES_PER_DIRECTORY {
+                // The directory has at least one more entry than the cap; the
+                // skipped names must keep the whole scan inconclusive.
+                scan.truncated = true;
+                break;
+            }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    // An enumeration error is not a complete directory.
+                    scan.truncated = true;
+                    break;
+                }
+            };
+            entries_seen += 1;
             let path = entry.path();
             let Some(file_type) = entry.file_type().ok() else {
+                // An entry whose type cannot be read may be the product entry;
+                // the scan is no longer complete enough for a negative claim.
+                scan.truncated = true;
                 continue;
             };
             if !file_type.is_file() && !file_type.is_symlink() {
@@ -255,6 +282,21 @@ pub fn scan_installations(
     });
     scan.installations = installations;
     scan
+}
+
+/// Case-folded, separator-normalized key for a path that may be a Windows
+/// 8.3 alias. Existing paths are canonicalized first so a short TEMP path and
+/// its long form never become two different products.
+fn path_key(path: &Path) -> String {
+    std::fs::canonicalize(path)
+        .map(|resolved| normalize_key(&canonical_text(&resolved)))
+        .unwrap_or_else(|_| normalize_key(&path.to_string_lossy()))
+}
+
+fn path_under(candidate: &str, root: &str) -> bool {
+    let candidate = normalize_key(candidate);
+    let root = normalize_key(root);
+    candidate == root || candidate.starts_with(&format!("{root}\\"))
 }
 
 fn declared_native_location(
@@ -516,15 +558,21 @@ fn residue_entries(
         if !directory.is_dir() {
             continue;
         }
-        let normalized = normalize_key(&directory.to_string_lossy());
+        let normalized = path_key(&directory);
         // An existing installation under this directory proves it is not a
-        // residue.
+        // residue. Compare canonical paths, not display paths: a short (8.3)
+        // TEMP path and its long form point at the same directory.
         let covered = best.values().any(|installation| {
             if installation.agent_id != signature.agent_id {
                 return false;
             }
-            let under =
-                |path: &HostPath| normalize_key(&path.display_path).starts_with(&normalized);
+            let under = |path: &HostPath| {
+                let candidate = path
+                    .canonical_path
+                    .as_deref()
+                    .unwrap_or(path.display_path.as_str());
+                path_under(candidate, &normalized)
+            };
             installation.executable.as_ref().map(under).unwrap_or(false)
                 || installation
                     .entry_script
@@ -625,6 +673,7 @@ mod tests {
     fn env_with(root: &Path) -> ScannerEnvironment {
         ScannerEnvironment {
             path_dirs: vec![root.to_path_buf()],
+            path_truncated: false,
             user_profile: Some(root.join("profile")),
             local_app_data: Some(root.join("local")),
             app_data: Some(root.join("roaming")),
@@ -891,6 +940,44 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn more_path_directories_than_the_cap_make_the_scan_inconclusive() {
+        let root = temp_root("path-cap");
+        let dirs = (0..MAX_PATH_DIRECTORIES + 1)
+            .map(|n| {
+                let dir = root.join(format!("bin{n:03}"));
+                fs::create_dir(&dir).unwrap();
+                dir
+            })
+            .collect();
+        let environment = ScannerEnvironment {
+            path_dirs: dirs,
+            ..Default::default()
+        };
+        let scan = scan_installations(&registry(), &environment, "local-windows");
+        assert!(
+            scan.truncated,
+            "a skipped PATH directory cannot support a conclusive not-installed claim"
+        );
+    }
+
+    #[test]
+    fn more_directory_entries_than_the_cap_make_the_scan_inconclusive() {
+        let root = temp_root("entry-cap");
+        for n in 0..MAX_ENTRIES_PER_DIRECTORY + 1 {
+            fs::write(root.join(format!("entry{n:05}.txt")), b"fixture").unwrap();
+        }
+        let environment = ScannerEnvironment {
+            path_dirs: vec![root],
+            ..Default::default()
+        };
+        let scan = scan_installations(&registry(), &environment, "local-windows");
+        assert!(
+            scan.truncated,
+            "an entry beyond the directory cap must not be reported as complete coverage"
+        );
     }
 
     #[test]

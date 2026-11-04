@@ -722,6 +722,65 @@ impl UsageSnapshot {
 // Views
 // ---------------------------------------------------------------------------
 
+/// What this host can say about the presence of a product's installation.
+///
+/// Three states, never two: an absent row is not the same as a product that is
+/// provably not installed. The middle state exists because discovery can be
+/// inconclusive (no readable root, an unreadable root, a truncated scan) and
+/// because a product may be installed but not yet registered after a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstallPresence {
+    /// A runnable entry was found by the host scan.
+    Installed,
+    /// The scan covered every declared root and found no runnable entry.
+    NotInstalled,
+    /// The scan could not conclude. "Unknown" is not "absent".
+    Undiscovered,
+}
+
+impl InstallPresence {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::NotInstalled => "not-installed",
+            Self::Undiscovered => "undiscovered",
+        }
+    }
+
+    pub fn is_installed(self) -> bool {
+        self == Self::Installed
+    }
+}
+
+/// What the catalogue's install scan actually covered. Shown in the UI so a
+/// missing product is never silently presented as "not installed".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CatalogScanView {
+    pub scanned_roots: u32,
+    pub entries_examined: u32,
+    pub unreadable_roots: u32,
+    pub truncated: bool,
+    /// `true` only when an absence may be stated as a fact.
+    pub conclusive: bool,
+    pub scanned_at: String,
+}
+
+impl CatalogScanView {
+    pub fn inconclusive_reason(&self) -> Option<&'static str> {
+        if self.scanned_roots == 0 {
+            Some("no-readable-root")
+        } else if self.unreadable_roots > 0 {
+            Some("unreadable-root")
+        } else if self.truncated {
+            Some("scan-truncated")
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderCatalogEntry {
@@ -735,8 +794,10 @@ pub struct ProviderCatalogEntry {
     pub official_entry: Option<String>,
     /// `supported | unverified | unsupported` for this build/host.
     pub status: String,
-    /// `true` when an installation of this product is registered on the host.
+    /// Derived from `presence`; kept for the existing consumers.
     pub installed: bool,
+    /// `installed | not-installed | undiscovered`.
+    pub presence: InstallPresence,
     pub evidence: String,
     pub limitation: Option<String>,
 }
@@ -771,6 +832,8 @@ pub struct UsageOverviewView {
     /// they must never be summed with a confirmed pool.
     pub unconfirmed_pools: Vec<PoolView>,
     pub catalog: Vec<ProviderCatalogEntry>,
+    /// Coverage of the install scan behind `catalog[].presence`.
+    pub catalog_scan: CatalogScanView,
     pub last_attempt_at: Option<String>,
     pub last_success_at: Option<String>,
     pub note: String,
@@ -813,8 +876,36 @@ pub struct RefreshOutcome {
     pub agent_id: String,
     pub status: UsageStatus,
     pub skipped: bool,
+    /// Stable machine-readable reason. The UI localises this code; `reason`
+    /// carries the human sentence for logs and details.
+    pub reason_code: Option<String>,
     pub reason: Option<String>,
     pub retry_after_ms: Option<i64>,
+}
+
+/// Stable reason codes shared with the UI. Adding one here is the only way a
+/// new outcome can reach the frontend with a translated explanation.
+pub mod reason {
+    /// No runnable installation was found and the scan was conclusive.
+    pub const NOT_INSTALLED: &str = "not-installed";
+    /// Discovery could not conclude whether the product is installed.
+    pub const NOT_DISCOVERED: &str = "not-discovered";
+    /// A recorded retry backoff has not elapsed yet.
+    pub const BACKOFF: &str = "backoff";
+    /// The product is installed but has no enabled read-only history root.
+    pub const NO_USAGE_ROOTS: &str = "no-usage-roots";
+    /// The product has no verified machine-readable usage source.
+    pub const UNSUPPORTED_SOURCE: &str = "unsupported-source";
+    /// The read ran but produced no number; the text says why.
+    pub const NO_NUMBER: &str = "no-number";
+    /// The read failed; `reason` carries the provider's own message.
+    pub const READ_FAILED: &str = "read-failed";
+    /// Some fields were read; the rest are explicitly unavailable.
+    pub const PARTIAL: &str = "partial";
+    /// The CLI is installed but this read has no usable credential.
+    pub const UNAUTHENTICATED: &str = "unauthenticated";
+    /// Nothing usable was recorded for this provider.
+    pub const UNKNOWN: &str = "unknown";
 }
 
 pub const OVERVIEW_NOTE: &str = "额度按已确认账户去重：同一账户的多个会话只显示一份池记录；身份未确认的池单独列出，不与任何账户相加。未知/陈旧/未认证/不支持均显示状态，不显示为 0。费用估算与真实账单分属不同指标，缓存 token 只按提供方语义计入一次。";
@@ -934,7 +1025,10 @@ mod tests {
     fn freshness_never_upgrades_an_unparseable_timestamp() {
         let now = crate::multicli::store::now_ms();
         assert_eq!(freshness_at("not-a-date", DEFAULT_TTL_MS, now), "unknown");
-        assert_eq!(freshness_at(&iso_after_ms(0), DEFAULT_TTL_MS, now), "fresh");
+        // Use the exact captured instant: calling `now_ms()` again can land one
+        // millisecond later, which is a negative age by design ("unknown").
+        let just_now = crate::multicli::history::ids::iso_from_millis(now);
+        assert_eq!(freshness_at(&just_now, DEFAULT_TTL_MS, now), "fresh");
         let old = iso_after_ms(-30 * 60 * 1000);
         assert_eq!(freshness_at(&old, DEFAULT_TTL_MS, now), "stale");
         let future = iso_after_ms(5 * 60 * 1000);

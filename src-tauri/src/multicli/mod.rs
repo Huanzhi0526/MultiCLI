@@ -5,6 +5,7 @@
 //! query service used by the navigation UI, and the redacted diagnostics
 //! document. Product IPC is registered in `multicli_bootstrap`.
 
+pub mod backup;
 pub mod custom;
 pub mod diagnostics;
 pub mod discovery;

@@ -1,3 +1,15 @@
+# S07 新增映射（源码候选，2026-11-04）
+
+| 领域 | 真实位置 | 边界 |
+|---|---|---|
+| 自有 profile 备份恢复 | src-tauri/src/multicli/backup.rs | SQLite 快照、校验、提交/回滚与待恢复标记；不备份 CLI 凭据或原始历史 |
+| 恢复生命周期及 IPC | src-tauri/src/multicli_bootstrap.rs | 数据库打开前仅首次尝试，重试不提前应用新计划 |
+| 数据与备份页面 | src/multicli/data/DataView.tsx | 本 profile 列表、备份、恢复确认及错误状态 |
+| 用户级安装/保留数据 | src-tauri/windows/nsis-hooks.nsh | 普通卸载默认保留数据，最终实机验收另列 |
+| 统一验证入口 | scripts/verify.ps1 | 调用 scripts/multicli/verify.ps1，PASS/FAIL/NOT_RUN 分列 |
+
+以下保留既有映射。
+
 # 实际源码映射（S00–S05）
 
 固定上游 `6c46345a727e7c1b57e0dacecb4fe063d88ee8dc`；以下路径相对 app。现存文件与拟新增路径明确分开。

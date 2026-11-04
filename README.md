@@ -1,4 +1,4 @@
-> **MultiCLI 派生项目已通过 S00 基线验收，产品功能尚未实施。** 请先阅读 [MultiCLI 当前入口](README-MultiCLI.md)、[施工状态](docs/execution/STATUS.md) 与 [能力实测](COMPATIBILITY.md)。以下为固定上游原说明，不是 MultiCLI 当前已支持能力；原应用的下载链接和更新渠道不适用于本项目。
+> **MultiCLI 派生项目已进入 S07-R1 返工回交，等待主管验收；S00–S06 已验收，S07 尚未宣布完成，Beta 未发布。** 请先阅读 [MultiCLI 当前入口](README-MultiCLI.md)、[施工状态](docs/execution/STATUS.md) 与 [能力实测](COMPATIBILITY.md)。以下为固定上游原说明，不是 MultiCLI 当前已支持能力；原应用的下载链接和更新渠道不适用于本项目。
 
 <div align="center">
 

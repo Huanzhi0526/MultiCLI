@@ -117,6 +117,7 @@ function overview(overrides: Partial<UsageOverviewView> = {}): UsageOverviewView
         officialEntry: "codex app-server → account/rateLimits/read",
         status: "supported",
         installed: true,
+        presence: "installed",
         evidence: "installed schema",
         limitation: "read-only",
       },
@@ -128,10 +129,19 @@ function overview(overrides: Partial<UsageOverviewView> = {}): UsageOverviewView
         officialEntry: "/cost",
         status: "unverified",
         installed: true,
+        presence: "installed",
         evidence: "no endpoint",
         limitation: "manual only",
       },
     ],
+    catalogScan: {
+      scannedRoots: 5,
+      entriesExamined: 120,
+      unreadableRoots: 0,
+      truncated: false,
+      conclusive: true,
+      scannedAt: "2026-11-03T10:00:00.000Z",
+    },
     lastAttemptAt: "2026-11-03T10:00:00.000Z",
     lastSuccessAt: "2026-11-03T10:00:00.000Z",
     note: "去重说明",
@@ -420,6 +430,7 @@ describe("usage centre", () => {
             agentId: "codex",
             status: "rate-limited",
             skipped: true,
+            reasonCode: "backoff",
             reason: "退避中",
             retryAfterMs: 60_000,
           },
@@ -431,5 +442,63 @@ describe("usage centre", () => {
       refresh.click();
     });
     expect(byTestId("usage-outcomes").textContent).toContain("已跳过");
+    expect(byTestId("usage-outcomes").textContent).toContain("退避中，本次未重新读取");
+  });
+
+  it("keeps an unconfirmed install apart from a confirmed absence", async () => {
+    const mixed = overview({
+      catalog: [
+        {
+          ...overview().catalog[0],
+          agentId: "gemini",
+          product: "Gemini CLI",
+          status: "unverified",
+          installed: false,
+          presence: "undiscovered",
+        },
+        {
+          ...overview().catalog[0],
+          agentId: "aider",
+          product: "Aider",
+          installed: false,
+          presence: "not-installed",
+        },
+      ],
+    });
+    await render(fakeApi(mixed));
+    expect(byTestId("usage-presence-gemini").textContent).toContain("尚未确认");
+    expect(byTestId("usage-presence-aider").textContent).toContain("已确认未安装");
+    // The old copy conflated both states into one word.
+    expect(byTestId("usage-presence-gemini").textContent).not.toContain("已确认未安装");
+  });
+
+  it("explains an inconclusive install scan and points at the scan page", async () => {
+    const inconclusive = overview({
+      catalogScan: {
+        scannedRoots: 0,
+        entriesExamined: 0,
+        unreadableRoots: 0,
+        truncated: false,
+        conclusive: false,
+        scannedAt: "2026-11-03T10:00:00.000Z",
+      },
+    });
+    let opened = 0;
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        <UsageView api={fakeApi(inconclusive)} onOpenInstallations={() => (opened += 1)} />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const banner = byTestId("usage-catalog-inconclusive");
+    expect(banner.textContent).toContain("安装扫描不完整");
+    expect(banner.textContent).toContain("不代表产品未安装");
+    (byTestId("usage-catalog-open-installations") as HTMLButtonElement).click();
+    expect(opened).toBe(1);
   });
 });

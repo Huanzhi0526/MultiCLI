@@ -86,10 +86,16 @@ export function EmptyPanel({
   title,
   hint,
   testId,
+  actionLabel,
+  onAction,
+  actionTestId,
 }: {
   title: string;
   hint?: string;
   testId?: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  actionTestId?: string;
 }) {
   return (
     <div
@@ -98,6 +104,16 @@ export function EmptyPanel({
     >
       <p className="text-sm font-medium text-text-primary">{title}</p>
       {hint ? <p className="max-w-md text-xs leading-5 text-text-secondary">{hint}</p> : null}
+      {actionLabel && onAction ? (
+        <button
+          type="button"
+          className="mt-1 rounded-md border border-separator-border bg-background-primary-default px-3 py-1 text-xs hover:bg-background-primary-hover"
+          onClick={onAction}
+          data-testid={actionTestId}
+        >
+          {actionLabel}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -205,6 +221,7 @@ export function ScopeList({
   onSelectWorkspace,
   onSelectAgent,
   onRetry,
+  onOpenHistory,
 }: {
   entry: "workspaces" | "agents";
   workspaces: PagedResource<WorkspaceListItem>;
@@ -214,6 +231,7 @@ export function ScopeList({
   onSelectWorkspace: (id: string) => void;
   onSelectAgent: (id: string) => void;
   onRetry: () => void;
+  onOpenHistory?: () => void;
 }) {
   const { t } = useTranslation("multicli");
   const current = entry === "workspaces" ? workspaces : agents;
@@ -249,6 +267,9 @@ export function ScopeList({
             title={entry === "workspaces" ? t("emptyWorkspaces") : t("emptyAgents")}
             hint={t("emptyScopeHint")}
             testId={`empty-${entry}`}
+            actionLabel={onOpenHistory ? t("emptyScopeAction") : undefined}
+            onAction={onOpenHistory}
+            actionTestId="empty-scope-open-history"
           />
         ) : null}
         <ul className="flex flex-col gap-1">
@@ -348,6 +369,7 @@ export function SessionList({
   onSelect,
   onRefresh,
   onRetry,
+  onOpenHistory,
 }: {
   sessions: PagedResource<SessionSummary>;
   selectedId: string | null;
@@ -356,6 +378,7 @@ export function SessionList({
   onSelect: (id: string) => void;
   onRefresh: () => void;
   onRetry: () => void;
+  onOpenHistory?: () => void;
 }) {
   const { t } = useTranslation("multicli");
   return (
@@ -413,6 +436,9 @@ export function SessionList({
             title={t("emptySessions")}
             hint={t("emptySessionsHint")}
             testId="empty-sessions"
+            actionLabel={onOpenHistory ? t("emptySessionsAction") : undefined}
+            onAction={onOpenHistory}
+            actionTestId="empty-sessions-open-history"
           />
         ) : null}
         <ul className="flex flex-col gap-1">

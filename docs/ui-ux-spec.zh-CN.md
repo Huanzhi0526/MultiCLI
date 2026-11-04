@@ -15,7 +15,7 @@
 
 ## MultiCLI S02 派生说明
 
-顶部新增三个视图页签：**会话 / 安装 / 外部进程**。会话页仍是 S01 的三栏只读导航（工作区 / Agent 两个入口打开同一会话），代码移到 `src/multicli/SessionBrowser.tsx`，testid 与行为不变。安装页与外部进程页是 S02 新增的只读入口，与 `multicli_list_installations` / `multicli_list_processes` / `multicli_refresh_discovery` 一一对应。
+顶部导航当前是九个视图页签：**会话 / 历史 / 安装 / 外部进程 / 终端 / 结构化运行 / 用量 / 自定义 CLI / 数据与备份**（S07 补上最后一个）。会话页仍是 S01 的三栏只读导航（工作区 / Agent 两个入口打开同一会话），代码在 `src/multicli/SessionBrowser.tsx`，testid 与行为不变；空态给「去启用历史来源」按钮，不再提示用 fixture 工具造数据。
 
 **扫描状态条**（两个发现页共用，`src/multicli/discovery/controls.tsx`）：显示 `status`（idle / scanning / ok / partial / error）、`generation`、`lastAttemptAt`、`lastSuccessAt`、采样/跟踪/不可读计数、扫描间隔下拉（3/5/10/30 秒）与「立即刷新」。任何失败都显示真实 `AppError`（`code` / `message` / `retryable` / `details`）与重试；整次失败时旧条目保留为 `stale`，不显示为空列表。固定说明写明「按间隔采样，短于间隔的进程可能漏见，不是审计级全量记录」，不允许删掉这句。
 
@@ -48,6 +48,11 @@
   永远列在单独一段，不与账户相加。
 - 来源表每行显示产品、额度来源（machine / transcript / none）、token 来源、官方人工入口、
   状态徽标与限制；未安装的产品标 `未安装`，不显示为已支持。
+- **安装状态是三态，不是「装了 / 没装」两态**：来源表的安装列显示 `已安装` / `已确认未安装` /
+  `尚未确认`。`尚未确认` 只表示本次安装扫描没能覆盖全部根（无根、有不可读根或被截断），
+  界面同时显示一行「本次安装扫描不完整」与「去『安装』页扫描」按钮；绝不把没看到写成未安装。
+  物理安装优先于惰性登记：目录里真实存在的产品在用量页刷新时会被按需登记，不需要用户先打开安装页。
+  本次刷新结果的每条原因用稳定的 `reasonCode` 本地化（zh/en/ko），后端原文只作为补充细节。
 - **新鲜度跟着本地时钟走**：页面打开期间每 15 秒按 `capturedAt` / `expiresAt` 重算一次，
   越过过期点立刻转 amber 并显示「已过期」；系统时钟大幅回拨时记 `unknown`，不继续显示「读数新鲜」。
   这是纯本地重算，不会自动启动 CLI 或发起后台读取。读数的成功/失败切换只由真实刷新结果决定。
@@ -59,6 +64,24 @@
 参数数组每行一个），下半是已保存条目。参数按行保存为数组，引号、空格、中文、`&` 原样保留，
 **不解析 shell 语法**；保存失败显示真实 `AppError` 并保留输入。条目行显示入口路径、`argv`、
 工作目录与「历史 / 额度：unsupported / unsupported」，删除只删配置，不停止已在运行的终端。
+
+## MultiCLI S07 派生说明（数据与备份页）
+
+第九个视图页签 **数据与备份**（`data-testid="view-data"`，`src/multicli/data/DataView.tsx`）只处理
+本应用自有 profile：显示 profile、数据目录、数据库文件、大小与 schema、日志模式、备份目录，并提供
+「立即备份」、备份列表（文件 / 创建时间 / 大小 / schema / 校验 / 恢复）与计划恢复。
+
+- **备份范围写在页面上，不靠用户猜**：页面用三语 `dataScopeNote` 明确「备份包含本应用数据库（含已
+  索引的会话与消息内容）；不包含 CLI 凭据、CLI 原始历史文件或工作区文件」。页面不列 CLI 路径，
+  不列账号指纹。后端 `scopeNote` 保留同一事实，供其他调用方核对。
+- **恢复是两段式、跨重启的**：点「恢复」先弹确认框，确认后只写 `restore-pending.json` 并在页面顶部
+  显示「待恢复」与取消按钮；真正替换发生在**下次启动、数据库打开之前**，当前库先复制到
+  `backups/pre-restore-*`。本次运行中不替换任何打开着的数据库文件。若启动时应用失败，标记保留并置
+  `failed=true`，页面显示「上次启动恢复失败，数据库未替换」，不再重复宣称「下次启动执行」。
+- **校验不通过就不给恢复**：列表里的 `checksum-mismatch` / `missing` / `unreadable` / `invalid-name` 备份显示 amber/red
+  徽标，恢复按钮禁用；来自更新 schema 的备份在计划阶段直接拒绝并提示不能降级恢复。
+- **空态给下一步**：没有备份时写「还没有备份。点『立即备份』生成第一份。」，不显示假条目。
+- 刷新入口：页头「刷新」重读 `multicli_profile_data`；备份成功后自动重读列表。见 [§7](#7-刷新入口清单)。
 
 ## MultiCLI S05 派生说明（结构化运行页）
 
@@ -470,6 +493,9 @@ const feedback = useRunningFeedback(store.loading);
 | MultiCLI 历史搜索重试 | `src/multicli/history/SearchPanel.tsx` | 错误面板重试按钮 | 同一查询重发第一页；失败保留上次结果并为空时不伪造结果 |
 | MultiCLI 历史浏览刷新 | `src/multicli/history/SearchPanel.tsx` | 文字按钮 + 面板加载态 | 重读 `origin=history-only` 第一页；加载更多失败保留已加载行 |
 | MultiCLI 历史消息加载更多 | `src/multicli/history/SessionPanel.tsx` | 按钮 + 底部加载态 | 同一会话游标续读；失败保留已加载消息并就地重试，不重建会话 |
+| MultiCLI 数据页刷新 | `src/multicli/data/DataView.tsx` | 文字按钮 disabled + 页面加载态 | 重读 `multicli_profile_data`（profile 事实 + 备份清单 + 待恢复状态）；失败显示真实 `AppError` 与重试，不清空已显示的备份行 |
+| MultiCLI 立即备份 | `src/multicli/data/DataView.tsx` | 按钮 disabled + `dataBackingUp` 文案 | 调用 `multicli_profile_backup`；成功后自动重读列表并显示文件名。失败保留列表并显示真实 `AppError`，不把失败写成「已备份」 |
+| MultiCLI 计划恢复 / 取消 | `src/multicli/data/DataView.tsx` | 确认框 + 按钮 disabled | 恢复只写待执行标记，必须跨重启；取消调用 `multicli_profile_cancel_restore`。校验失败的备份禁用恢复按钮 |
 | 文件树刷新 | `src/features/files/FileTreeRow.tsx` | `useRunningFeedback(filesStore.refreshing)` | 入口在工作区根行（合成根节点），随该行悬停出现（同该行「添加到聊天」加号）；刷新可能由别处触发，故走状态驱动 |
 | 插件市场索引 | `src/features/plugins/hub/PluginMarketView.tsx` | `useActionFeedback` | 图标按钮位于筛选工具条（分类 chips + 排序 + 搜索）右侧；`isFailure` 读 `marketplaceStore.error`。一次刷新同时重读索引与 `featured.json`（精选是软依赖：拉不到只清空轮播，不写 `error`） |
 | 插件重新加载 | `src/features/plugins/hub/PluginInstalledRow.tsx` | `useActionFeedback` | 成功后该行转为健康态、按钮消失 |

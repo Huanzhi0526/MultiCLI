@@ -8,6 +8,7 @@ import App from "./App";
 import type { MultiCliApi } from "./api";
 import type {
   AgentListItem,
+  BackupRecord,
   Capability,
   CapabilityName,
   CapabilityQuery,
@@ -25,9 +26,11 @@ import type {
   MessagePage,
   MessagePageQuery,
   Page,
+  PendingRestore,
   ProcessDiscoveryPage,
   ProcessDiscoveryView,
   ProcessQuery,
+  ProfileDataView,
   ResumeTargetView,
   RuntimeCapabilitiesView,
   RuntimeEventPage,
@@ -802,6 +805,14 @@ class FakeApi implements MultiCliApi {
       accounts: [],
       unconfirmedPools: [],
       catalog: [],
+      catalogScan: {
+        scannedRoots: 0,
+        entriesExamined: 0,
+        unreadableRoots: 0,
+        truncated: false,
+        conclusive: false,
+        scannedAt: "2026-11-03T10:00:00.000Z",
+      },
       lastAttemptAt: null,
       lastSuccessAt: null,
       note: "",
@@ -826,6 +837,45 @@ class FakeApi implements MultiCliApi {
   }
 
   customCliDelete(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  profileData(): Promise<ProfileDataView> {
+    return Promise.resolve({
+      profile: "test",
+      dataRoot: "C:\\Users\\test\\AppData\\Local\\MultiCLI\\test",
+      databaseFile: "C:\\Users\\test\\AppData\\Local\\MultiCLI\\test\\multicli.db",
+      databaseBytes: 8192,
+      databaseSchema: 7,
+      expectedSchema: 7,
+      journalMode: "wal",
+      backupDirectory: "C:\\Users\\test\\AppData\\Local\\MultiCLI\\test\\backups",
+      backups: [],
+      pendingRestore: null,
+      lastRestore: null,
+      scopeNote: "只包含 MultiCLI 自有 profile 的 SQLite 数据库。",
+    });
+  }
+
+  profileBackup(): Promise<BackupRecord> {
+    return Promise.reject({
+      code: "io",
+      message: "not used in this suite",
+      retryable: true,
+      details: {},
+    });
+  }
+
+  profileRestore(): Promise<PendingRestore> {
+    return Promise.reject({
+      code: "invalid_argument",
+      message: "not used in this suite",
+      retryable: false,
+      details: {},
+    });
+  }
+
+  profileCancelRestore(): Promise<void> {
     return Promise.resolve();
   }
 

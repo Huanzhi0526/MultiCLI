@@ -63,6 +63,7 @@ struct BaselineInfo {
     stage: &'static str,
     profile: String,
     data_root: String,
+    data_root_override: bool,
     upstream_commit: &'static str,
     disabled: [&'static str; 7],
 }
@@ -90,8 +91,24 @@ fn data_root_for(base: &Path, profile: &str) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn data_root() -> Result<PathBuf, String> {
+    // Verification and portable runs may pin the exact profile directory.
+    // The default stays the Windows known-folder path; an override is opt-in,
+    // must be absolute, and is reported in the baseline view so nobody has to
+    // guess which database a window is using.
+    if let Some(raw) = std::env::var_os("MULTICLI_DATA_ROOT") {
+        let path = PathBuf::from(raw);
+        if !path.is_absolute() {
+            return Err("MULTICLI_DATA_ROOT must be an absolute path".into());
+        }
+        return Ok(path);
+    }
     let base = dirs::data_local_dir().ok_or("Local application data directory unavailable")?;
     data_root_for(&base, &profile()?)
+}
+
+/// `true` when the current process pinned its data root via the environment.
+pub(crate) fn data_root_override() -> bool {
+    std::env::var_os("MULTICLI_DATA_ROOT").is_some()
 }
 
 /// Holds the lazily opened service. A failed open is remembered as a real
@@ -101,6 +118,10 @@ pub struct MultiCliRuntime {
     root: PathBuf,
     profile: String,
     state: Mutex<RuntimeState>,
+    /// A planned restore is a startup action, not a retry action. Once this
+    /// process has attempted it, an IPC retry or a data-page refresh must not
+    /// replace a database that is already open.
+    restore_attempted: std::sync::atomic::AtomicBool,
     discovery: Mutex<Option<Arc<DiscoveryEngine>>>,
     history: Mutex<Option<Arc<HistoryEngine>>>,
     terminal: Mutex<Option<Arc<TerminalManager>>>,
@@ -126,6 +147,7 @@ impl MultiCliRuntime {
             root,
             profile,
             state: Mutex::new(RuntimeState::default()),
+            restore_attempted: std::sync::atomic::AtomicBool::new(false),
             discovery: Mutex::new(None),
             history: Mutex::new(None),
             terminal: Mutex::new(None),
@@ -134,6 +156,14 @@ impl MultiCliRuntime {
             runtime_sweeper: Mutex::new(None),
             app: Mutex::new(None),
         }
+    }
+
+    /// True for the first call in this process only. A retry or a data-page
+    /// refresh must not apply a planned restore to an already-open database.
+    fn take_restore_attempt(&self) -> bool {
+        !self
+            .restore_attempted
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Called once from `setup`, before the first terminal command can run.
@@ -219,6 +249,22 @@ impl MultiCliRuntime {
                         return Err(error);
                     }
                 }
+            }
+        }
+        // A planned restore is applied **before** the database is opened, so
+        // no connection ever points at a file that is being replaced. A
+        // failure keeps the marker and the original database; the data view
+        // shows that the restore did not run.
+        if self.take_restore_attempt() {
+            if let Err(error) = crate::multicli::backup::apply_pending_restore(&root) {
+                eprintln!(
+                    "[multicli] planned profile restore was not applied: {}: {}",
+                    error.code.as_str(),
+                    error.message
+                );
+                // Keep the marker, but mark it failed so the data page can show a
+                // real state instead of claiming the restore is still pending.
+                let _ = crate::multicli::backup::mark_restore_failed(&root, &error);
             }
         }
         match MultiCliService::open(&root) {
@@ -406,6 +452,65 @@ impl MultiCliRuntime {
         Ok(center)
     }
 
+    // -----------------------------------------------------------------------
+    // Own-profile backup / restore (S07)
+    // -----------------------------------------------------------------------
+
+    /// Writes one consistent snapshot of this profile's database. Only the
+    /// MultiCLI database is exported; CLI credentials and transcripts are not
+    /// part of this profile.
+    pub fn backup_profile(&self) -> Result<crate::multicli::backup::BackupRecord, AppError> {
+        let service = self.service()?;
+        // A dedicated read-only connection keeps the global database mutex free
+        // while VACUUM INTO and the checksum run. `VACUUM INTO` is a read
+        // operation on the source, so this is safe with WAL enabled.
+        let connection = rusqlite::Connection::open_with_flags(
+            service.database_path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|error| {
+            AppError::new(ErrorCode::Io, format!("backup connection failed: {error}"))
+                .with_details(serde_json::json!({ "stage": "backupConnection" }))
+                .with_retryable(true)
+        })?;
+        crate::multicli::backup::create_backup(
+            &connection,
+            &self.root,
+            &self.profile,
+            env!("CARGO_PKG_VERSION"),
+            "manual",
+        )
+    }
+
+    pub fn profile_data(&self) -> Result<crate::multicli::backup::ProfileDataView, AppError> {
+        // This page is also the recovery entry point. A damaged or exclusively
+        // locked database must not hide the backup list, so opening the store
+        // is best-effort: schema/journal simply report what the file says.
+        let journal = match self.service() {
+            Ok(service) => service
+                .journal_mode()
+                .unwrap_or_else(|_| "unknown".to_string()),
+            Err(_) => "unknown".to_string(),
+        };
+        crate::multicli::backup::profile_view(
+            &self.root,
+            &self.profile,
+            &journal,
+            crate::multicli::SCHEMA_VERSION,
+        )
+    }
+
+    pub fn plan_profile_restore(
+        &self,
+        file_name: &str,
+    ) -> Result<crate::multicli::backup::PendingRestore, AppError> {
+        crate::multicli::backup::plan_restore(&self.root, file_name)
+    }
+
+    pub fn cancel_profile_restore(&self) -> Result<(), AppError> {
+        crate::multicli::backup::cancel_pending_restore(&self.root)
+    }
+
     /// Ends every owned protocol connection. Called from the application exit
     /// event; external CLI processes are never enumerated.
     pub fn stop_runtime(&self) {
@@ -429,6 +534,45 @@ impl MultiCliRuntime {
 
 fn usage_overview_impl(center: &UsageCenter) -> Result<UsageOverviewView, AppError> {
     center.overview()
+}
+
+// ---------------------------------------------------------------------------
+// Own-profile data: backup, planned restore, profile facts
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn multicli_profile_data(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::backup::ProfileDataView, AppError> {
+    runtime.profile_data()
+}
+
+#[tauri::command]
+async fn multicli_profile_backup(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::backup::BackupRecord, AppError> {
+    runtime.backup_profile()
+}
+
+#[tauri::command]
+async fn multicli_profile_restore(
+    query: Option<serde_json::Value>,
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<crate::multicli::backup::PendingRestore, AppError> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct RestoreQuery {
+        file_name: String,
+    }
+    let query: RestoreQuery = required_argument(query, "query")?;
+    runtime.plan_profile_restore(&query.file_name)
+}
+
+#[tauri::command]
+async fn multicli_profile_cancel_restore(
+    runtime: State<'_, MultiCliRuntime>,
+) -> Result<(), AppError> {
+    runtime.cancel_profile_restore()
 }
 
 // A usage read can start a CLI and wait for its answer. Running it as an async
@@ -501,9 +645,10 @@ fn multicli_custom_cli_delete(
 fn multicli_baseline_info(runtime: State<'_, MultiCliRuntime>) -> Result<BaselineInfo, String> {
     Ok(BaselineInfo {
         product: "MultiCLI",
-        stage: "S06 — account usage, quota pools and the nine CLI families",
+        stage: "local Windows CLI workbench",
         profile: runtime.profile().to_string(),
         data_root: runtime.root().display().to_string(),
+        data_root_override: data_root_override(),
         upstream_commit: "6c46345a727e7c1b57e0dacecb4fe063d88ee8dc",
         disabled: [
             "remote",
@@ -1368,7 +1513,7 @@ pub fn run() {
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("MultiCLI — S06")
+            .title("MultiCLI")
             .inner_size(1320.0, 820.0)
             .min_inner_size(960.0, 640.0)
             .data_directory(webview_directory)
@@ -1441,6 +1586,10 @@ pub fn run() {
             multicli_terminal_quit_check,
             multicli_usage_overview,
             multicli_usage_refresh,
+            multicli_profile_data,
+            multicli_profile_backup,
+            multicli_profile_restore,
+            multicli_profile_cancel_restore,
             multicli_custom_cli_list,
             multicli_custom_cli_create,
             multicli_custom_cli_delete,
@@ -1552,6 +1701,74 @@ mod tests {
         .expect("custom cli list");
         let value: serde_json::Value = custom.deserialize().unwrap();
         assert!(value.as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profile_data_backup_and_planned_restore_pass_through_ipc() {
+        let root = temp_root("ipc-profile-data");
+        let app = tauri::test::mock_builder()
+            .manage(MultiCliRuntime::new(root.clone(), "test".into()))
+            .invoke_handler(tauri::generate_handler![
+                multicli_profile_data,
+                multicli_profile_backup,
+                multicli_profile_restore,
+                multicli_profile_cancel_restore
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let call = |cmd: &str, body: serde_json::Value| -> serde_json::Value {
+            tauri::test::get_ipc_response(
+                &window,
+                tauri::webview::InvokeRequest {
+                    cmd: cmd.into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: "http://tauri.localhost".parse().unwrap(),
+                    body: tauri::ipc::InvokeBody::Json(body),
+                    headers: Default::default(),
+                    invoke_key: tauri::test::INVOKE_KEY.to_string(),
+                },
+            )
+            .unwrap_or_else(|error| panic!("{cmd}: {error:?}"))
+            .deserialize()
+            .unwrap()
+        };
+
+        let data = call("multicli_profile_data", json!({}));
+        assert_eq!(data["profile"], "test");
+        assert_eq!(data["expectedSchema"], 7);
+        assert!(data["backups"].as_array().unwrap().is_empty());
+        assert!(data["pendingRestore"].is_null());
+
+        let backup = call("multicli_profile_backup", json!({}));
+        assert_eq!(backup["integrity"], "ok");
+        assert!(backup["manifest"]["sha256"].as_str().unwrap().len() == 64);
+        let file = backup["manifest"]["fileName"]
+            .as_str()
+            .expect("file name")
+            .to_string();
+        assert!(file.ends_with(".db"));
+
+        let listed = call("multicli_profile_data", json!({}));
+        assert_eq!(listed["backups"].as_array().unwrap().len(), 1);
+
+        // Planning a restore writes only the marker; the database is replaced
+        // on the next start, never from this command.
+        let planned = call(
+            "multicli_profile_restore",
+            json!({ "query": { "fileName": file } }),
+        );
+        assert_eq!(planned["backupFileName"], file);
+        let pending = call("multicli_profile_data", json!({}));
+        assert_eq!(pending["pendingRestore"]["backupFileName"], file);
+
+        call("multicli_profile_cancel_restore", json!({}));
+        let cancelled = call("multicli_profile_data", json!({}));
+        assert!(cancelled["pendingRestore"].is_null());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2067,6 +2284,42 @@ mod tests {
         assert!(data_root_for(std::path::Path::new("relative"), "test").is_err());
         assert_eq!(selected_profile(None, true).unwrap(), "dev");
         assert_eq!(selected_profile(None, false).unwrap(), "prod");
+    }
+
+    #[test]
+    fn a_failed_store_retry_waits_until_restart_to_apply_a_new_restore() {
+        let root = temp_root("restore-retry-lifecycle");
+        let initial = MultiCliService::open(&root).unwrap();
+        initial.register_host(&Host::local("preserved-in-backup")).unwrap();
+        let record = crate::multicli::backup::create_backup(
+            &initial.store().connection().lock(), &root, "test", "0.1.0", "manual",
+        ).unwrap();
+        drop(initial);
+        let corrupt = b"synthetic damaged database";
+        std::fs::write(root.join("multicli.db"), corrupt).unwrap();
+        let runtime = MultiCliRuntime::new(root.clone(), "test".into());
+        assert!(runtime.service().is_err());
+        runtime.plan_profile_restore(&record.manifest.file_name).unwrap();
+        let data = runtime.profile_data().unwrap();
+        assert!(data.pending_restore.is_some(), "refresh cannot apply a newly planned restore");
+        assert!(data.last_restore.is_none());
+        assert_eq!(std::fs::read(root.join("multicli.db")).unwrap(), corrupt);
+        drop(runtime);
+        let restarted = MultiCliRuntime::new(root.clone(), "test".into());
+        assert!(restarted.service().is_ok());
+        let data = restarted.profile_data().unwrap();
+        assert!(data.pending_restore.is_none());
+        assert!(data.last_restore.is_some());
+    }
+
+    #[test]
+    fn a_runtime_takes_only_one_restore_attempt() {
+        let runtime = MultiCliRuntime::new(
+            std::env::temp_dir().join("multicli-restore-gate"),
+            "test".to_string(),
+        );
+        assert!(runtime.take_restore_attempt());
+        assert!(!runtime.take_restore_attempt());
     }
 
     #[cfg(windows)]

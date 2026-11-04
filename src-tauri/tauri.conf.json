@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MultiCLI",
+  "productName": "MultiCLI Workbench",
   "version": "0.1.0",
   "identifier": "local.multicli.workbench",
   "build": {
@@ -50,7 +50,9 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "languages": ["SimpChinese", "English"],
+        "installerHooks": "windows/nsis-hooks.nsh"
       }
     }
   },

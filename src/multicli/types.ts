@@ -1025,9 +1025,24 @@ export interface ProviderCatalogEntry {
   tokenAccess: string;
   officialEntry: string | null;
   status: string;
+  /** Derived from `presence`; kept for existing consumers. */
   installed: boolean;
+  /** `installed | not-installed | undiscovered` */
+  presence: InstallPresence;
   evidence: string;
   limitation: string | null;
+}
+
+export type InstallPresence = "installed" | "not-installed" | "undiscovered";
+
+export interface CatalogScanView {
+  scannedRoots: number;
+  entriesExamined: number;
+  unreadableRoots: number;
+  truncated: boolean;
+  /** `true` only when an absence may be stated as a fact. */
+  conclusive: boolean;
+  scannedAt: string;
 }
 
 export interface UsageOverviewView {
@@ -1036,6 +1051,7 @@ export interface UsageOverviewView {
   accounts: UsageAccountView[];
   unconfirmedPools: PoolView[];
   catalog: ProviderCatalogEntry[];
+  catalogScan: CatalogScanView;
   lastAttemptAt: string | null;
   lastSuccessAt: string | null;
   note: string;
@@ -1045,6 +1061,8 @@ export interface RefreshOutcome {
   agentId: string;
   status: UsageStatus;
   skipped: boolean;
+  /** Stable code the UI translates; `reason` stays for details/logs. */
+  reasonCode: string | null;
   reason: string | null;
   retryAfterMs: number | null;
 }
@@ -1052,6 +1070,63 @@ export interface RefreshOutcome {
 export interface UsageRefreshResult {
   overview: UsageOverviewView;
   outcomes: RefreshOutcome[];
+}
+
+export interface BackupManifest {
+  manifestVersion: number;
+  createdAt: string;
+  appVersion: string;
+  profile: string;
+  databaseSchema: number;
+  fileName: string;
+  sizeBytes: number;
+  sha256: string;
+  source: string;
+  tables: string[];
+  scopeNote: string;
+}
+
+export interface BackupRecord {
+  manifest: BackupManifest;
+  path: string;
+  /** `ok | missing | checksum-mismatch | unreadable | invalid-name` */
+  integrity: string;
+}
+
+export interface PendingRestore {
+  /** Stable id of this concrete plan; may be absent in pre-R1 markers. */
+  planId?: string;
+  backupFileName: string;
+  sha256: string;
+  requestedAt: string;
+  databaseSchema: number;
+  note: string;
+  /** True when the last start could not apply this restore. */
+  failed?: boolean;
+}
+
+export interface RestoreOutcome {
+  planId?: string;
+  restoredFrom: string;
+  restoredSha256?: string;
+  appliedAt: string;
+  previousCopy: string | null;
+  databaseSchema: number;
+}
+
+export interface ProfileDataView {
+  profile: string;
+  dataRoot: string;
+  databaseFile: string;
+  databaseBytes: number;
+  databaseSchema: number;
+  expectedSchema: number;
+  journalMode: string;
+  backupDirectory: string;
+  backups: BackupRecord[];
+  pendingRestore: PendingRestore | null;
+  lastRestore: RestoreOutcome | null;
+  scopeNote: string;
 }
 
 export interface CustomCliInput {

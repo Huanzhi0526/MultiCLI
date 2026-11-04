@@ -110,6 +110,7 @@ fn fixture(name: &str) -> Fixture {
     service.register_host(&Host::local(HOST)).unwrap();
     let environment = ScannerEnvironment {
         path_dirs: vec![bin.clone()],
+        path_truncated: false,
         user_profile: Some(root.join("profile")),
         local_app_data: Some(root.join("local")),
         app_data: Some(root.join("roaming")),
@@ -177,6 +178,7 @@ fn restart_reconciles_absent_persisted_process_only_after_successful_enumeration
         HOST, &fixture.root.join("data"), fixture.service.clone(),
         fixture.backend.clone(), ScannerEnvironment {
             path_dirs: vec![fixture.exe.parent().unwrap().to_path_buf()],
+            path_truncated: false,
             user_profile: None, local_app_data: None, app_data: None, program_files: None,
         },
     );

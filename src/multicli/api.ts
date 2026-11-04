@@ -6,6 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentListItem,
+  BackupRecord,
   Capability,
   CapabilityQuery,
   CustomCliInput,
@@ -23,8 +24,10 @@ import type {
   MessagePageQuery,
   Page,
   PageQuery,
+  PendingRestore,
   ProcessDiscoveryPage,
   ProcessQuery,
+  ProfileDataView,
   ResumeTargetView,
   RuntimeAnswerInput,
   RuntimeCapabilitiesView,
@@ -120,6 +123,11 @@ export interface MultiCliApi {
   customCliList(): Promise<CustomCliView[]>;
   customCliCreate(input: CustomCliInput): Promise<CustomCliView>;
   customCliDelete(id: string): Promise<void>;
+  // S07 own-profile data: backup and planned restore
+  profileData(): Promise<ProfileDataView>;
+  profileBackup(): Promise<BackupRecord>;
+  profileRestore(fileName: string): Promise<PendingRestore>;
+  profileCancelRestore(): Promise<void>;
 }
 
 function pageArgs(query: PageQuery): Record<string, unknown> {
@@ -362,6 +370,12 @@ export function createMultiCliApi(invokeFn: InvokeFn): MultiCliApi {
       }),
     customCliDelete: (id) =>
       invokeFn<void>("multicli_custom_cli_delete", { query: { id } }),
+    profileData: () => invokeFn<ProfileDataView>("multicli_profile_data"),
+    profileBackup: () => invokeFn<BackupRecord>("multicli_profile_backup"),
+    profileRestore: (fileName) =>
+      invokeFn<PendingRestore>("multicli_profile_restore", { query: { fileName } }),
+    profileCancelRestore: () =>
+      invokeFn<void>("multicli_profile_cancel_restore"),
   };
 }
 

@@ -3009,6 +3009,51 @@ fn diagnostics_anonymizes_agent_identifiers_that_contain_private_text() {
     assert_eq!(doc["capabilities"]["byAgent"][0]["unverified"], 1);
 }
 
+#[test]
+fn diagnostics_never_contains_message_text_workspace_paths_or_native_ids() {
+    let root = TempRoot::new("diagnostics-private-body");
+    let service = open(&root);
+    seed_host(&service);
+    service
+        .register_agent(&agent("codex", "OpenAI", "Codex CLI"))
+        .unwrap();
+    service
+        .register_workspace(&workspace(
+            "ws-private",
+            HOST_ID,
+            r"D:\PRIVATE_WORKSPACE_SENTINEL\项目 Alpha",
+        ))
+        .unwrap();
+    let mut stored_session = session("session-private", "codex", Some("NATIVE_SESSION_SENTINEL"));
+    stored_session.title = "TITLE_SENTINEL_PRIVATE 私有会话标题".to_string();
+    service.ensure_session(&stored_session).unwrap();
+    let mut message = message("message-private", &stored_session.id, "src", None, 1, T1);
+    message.content = json!({
+        "role": "assistant",
+        "text": "BODY_SENTINEL_SECRET with a full private answer",
+    });
+    service.record_message(&message).unwrap();
+
+    let exported = service.export_diagnostics("test").unwrap();
+    let text = fs::read_to_string(&exported.path).unwrap();
+    for sentinel in [
+        "PRIVATE_WORKSPACE_SENTINEL",
+        "NATIVE_SESSION_SENTINEL",
+        "BODY_SENTINEL_SECRET",
+        "TITLE_SENTINEL_PRIVATE",
+        "message-private",
+    ] {
+        assert!(
+            !text.contains(sentinel),
+            "diagnostics leaked private content: {sentinel}"
+        );
+    }
+    // Counts are still reported, so the export is useful without the content.
+    let doc: Value = serde_json::from_str(&text).unwrap();
+    assert!(doc["counts"]["messages"].as_u64().unwrap() >= 1);
+    assert!(doc["counts"]["workspaces"].as_u64().unwrap() >= 1);
+}
+
 // ---------------------------------------------------------------------------
 // S01 real path resolution and Git worktree identity
 // ---------------------------------------------------------------------------

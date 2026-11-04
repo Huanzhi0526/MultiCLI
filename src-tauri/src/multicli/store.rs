@@ -1199,7 +1199,9 @@ fn create_backup(
     from_version: i64,
     target_version: i64,
 ) -> Result<BackupInfo, AppError> {
-    let backup_dir = data_root.join("backups");
+    // Migration safety copies are not user backups: keep them in a subdirectory
+    // so the profile backup list never shows an unreadable pseudo-backup.
+    let backup_dir = data_root.join("backups").join("migrations");
     std::fs::create_dir_all(&backup_dir)?;
     let stamp = now_ms();
     let unique = Uuid::new_v4().simple().to_string();

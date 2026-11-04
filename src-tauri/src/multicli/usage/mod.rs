@@ -23,18 +23,21 @@ pub mod transcript;
 mod tests;
 
 pub use model::{
-    AccountProfile, IdentityStatus, PoolView, ProviderCatalogEntry, QuotaPool, RefreshOutcome,
-    UsageAccountView, UsageMetric, UsageOverviewView, UsageRefreshRequest, UsageRefreshResult,
-    UsageSample, UsageSnapshot, UsageSourceKind, UsageStatus, UsageUnit, UsageWindow,
-    OVERVIEW_NOTE, USAGE_SCHEMA_VERSION,
+    AccountProfile, CatalogScanView, IdentityStatus, InstallPresence, PoolView, ProviderCatalogEntry,
+    QuotaPool, RefreshOutcome, UsageAccountView, UsageMetric, UsageOverviewView, UsageRefreshRequest,
+    UsageRefreshResult, UsageSample, UsageSnapshot, UsageSourceKind, UsageStatus, UsageUnit,
+    UsageWindow, OVERVIEW_NOTE, USAGE_SCHEMA_VERSION,
 };
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::multicli::discovery::detect::{scan_installations, InstallStatus, ScannerEnvironment};
+use crate::multicli::discovery::detect::{
+    scan_installations, DetectedInstallation, InstallStatus, InstallationScan, ScannerEnvironment,
+};
 use crate::multicli::terminal::launch::{cleanup_trampoline, plan_launch, LaunchPaths, PinnedTarget};
 use crate::multicli::terminal::model::{LaunchChain, TerminalTargetKind};
 use crate::multicli::discovery::signature::{normalize_key, ProductKind, SignatureRegistry};
@@ -181,6 +184,103 @@ pub fn provider_for(agent_id: &str) -> Option<&'static ProviderSpec> {
     PROVIDERS.iter().find(|spec| spec.agent_id == agent_id)
 }
 
+/// One install scan shared by the catalogue and the refresh pass.
+///
+/// The scan is the ground truth for "is this product here". A database row is
+/// only a cache that discovery fills in: treating a missing row as "not
+/// installed" is what made a physically installed product disappear from the
+/// catalogue before the discovery module had ever run.
+#[derive(Clone)]
+struct InstallationCoverage {
+    scan: InstallationScan,
+    /// Canonical executables that the *scan itself* classified as installed.
+    installed_paths: BTreeSet<String>,
+    presence: BTreeMap<&'static str, InstallPresence>,
+}
+
+impl InstallationCoverage {
+    fn collect(host_id: &str) -> Self {
+        let registry = SignatureRegistry::standard();
+        let environment = ScannerEnvironment::from_process_env();
+        Self::from_scan(scan_installations(&registry, &environment, host_id))
+    }
+
+    fn from_scan(scan: InstallationScan) -> Self {
+        let installed_paths = scan
+            .installations
+            .iter()
+            .filter(|item| item.status == InstallStatus::Installed)
+            .filter_map(|item| item.executable.as_ref())
+            .filter_map(|path| path.canonical_path.as_deref())
+            .map(normalize_key)
+            .collect::<BTreeSet<_>>();
+        let conclusive =
+            scan.scanned_roots > 0 && scan.unreadable_roots == 0 && !scan.truncated;
+        let mut presence = BTreeMap::new();
+        for spec in PROVIDERS {
+            let found = scan
+                .installations
+                .iter()
+                .any(|item| item.agent_id == spec.agent_id && item.status == InstallStatus::Installed);
+            // An executable that exists but whose identity cannot be proven is
+            // not evidence of absence. Keep it unknown instead of promoting a
+            // candidate to "confirmed not installed".
+            let unresolved = scan.installations.iter().any(|item| {
+                item.agent_id == spec.agent_id && item.status == InstallStatus::Unverified
+            });
+            presence.insert(
+                spec.agent_id,
+                if found {
+                    InstallPresence::Installed
+                } else if unresolved {
+                    InstallPresence::Undiscovered
+                } else if conclusive {
+                    InstallPresence::NotInstalled
+                } else {
+                    // The scan ran but could not cover every root. Saying
+                    // "not installed" here would be a claim the host data does
+                    // not support.
+                    InstallPresence::Undiscovered
+                },
+            );
+        }
+        Self {
+            scan,
+            installed_paths,
+            presence,
+        }
+    }
+
+    fn presence(&self, agent_id: &str) -> InstallPresence {
+        self.presence
+            .get(agent_id)
+            .copied()
+            .unwrap_or(InstallPresence::Undiscovered)
+    }
+
+    /// A runnable detection for the product, if the scan found one.
+    fn detected(&self, agent_id: &str) -> Option<&DetectedInstallation> {
+        self.scan.installations.iter().find(|item| {
+            item.agent_id == agent_id
+                && item.status == InstallStatus::Installed
+                && item.executable.is_some()
+        })
+    }
+
+    fn view(&self) -> CatalogScanView {
+        CatalogScanView {
+            scanned_roots: u32::try_from(self.scan.scanned_roots).unwrap_or(u32::MAX),
+            entries_examined: u32::try_from(self.scan.entries_examined).unwrap_or(u32::MAX),
+            unreadable_roots: u32::try_from(self.scan.unreadable_roots).unwrap_or(u32::MAX),
+            truncated: self.scan.truncated,
+            conclusive: self.scan.scanned_roots > 0
+                && self.scan.unreadable_roots == 0
+                && !self.scan.truncated,
+            scanned_at: model::now_iso8601(),
+        }
+    }
+}
+
 pub struct UsageCenter {
     host_id: String,
     service: Arc<MultiCliService>,
@@ -188,6 +288,10 @@ pub struct UsageCenter {
     /// One refresh at a time: two concurrent `codex app-server` probes would
     /// double the CLI's startup cost and could interleave their reads.
     gate: Mutex<()>,
+    /// Deterministic install scan for unit tests. Production always reads the
+    /// live host; nothing outside `cfg(test)` can set this.
+    #[cfg(test)]
+    coverage: Mutex<Option<InstallationCoverage>>,
 }
 
 impl UsageCenter {
@@ -197,7 +301,26 @@ impl UsageCenter {
             service,
             data_root,
             gate: Mutex::new(()),
+            #[cfg(test)]
+            coverage: Mutex::new(None),
         }
+    }
+
+    /// Test-only: freeze the install scan so presence states are deterministic
+    /// on any host.
+    #[cfg(test)]
+    pub(crate) fn set_test_coverage(&self, scan: InstallationScan) {
+        *self.coverage.lock() = Some(InstallationCoverage::from_scan(scan));
+    }
+
+    fn coverage(&self) -> InstallationCoverage {
+        #[cfg(test)]
+        {
+            if let Some(fixed) = self.coverage.lock().clone() {
+                return fixed;
+            }
+        }
+        InstallationCoverage::collect(&self.host_id)
     }
 
     // -----------------------------------------------------------------------
@@ -209,7 +332,7 @@ impl UsageCenter {
         // guard; read them *before* locking, otherwise a non-reentrant mutex
         // would deadlock this call against itself.
         let installations = self.service.list_all_installations(&self.host_id)?;
-        let installed = self.installed_executables();
+        let coverage = self.coverage();
         let store = self.service.store();
         let conn = store.connection().lock();
         let accounts = repo::all_accounts(&conn, &self.host_id)?;
@@ -259,10 +382,10 @@ impl UsageCenter {
         let catalog = PROVIDERS
             .iter()
             .map(|spec| {
-                // A registered row is not enough: an IDE shim or a residue
-                // directory also produces one. Only a discovery result with the
-                // `installed` status may be presented as installed here.
-                let is_installed = installations
+                // Presence comes from the scan alone. A registered row still
+                // counts as a fast path, but a missing row must never hide a
+                // physically installed product.
+                let registered = installations
                     .iter()
                     .filter(|installation| installation.agent_id == spec.agent_id)
                     .any(|installation| {
@@ -271,16 +394,22 @@ impl UsageCenter {
                             .canonical_path
                             .as_deref()
                             .map(normalize_key)
-                            .is_some_and(|path| installed.contains(&path))
+                            .is_some_and(|path| coverage.installed_paths.contains(&path))
                     });
+                let presence = if registered {
+                    InstallPresence::Installed
+                } else {
+                    coverage.presence(spec.agent_id)
+                };
                 ProviderCatalogEntry {
                     agent_id: spec.agent_id.to_string(),
                     product: spec.product.to_string(),
                     quota_access: spec.quota_access.to_string(),
                     token_access: spec.token_access.to_string(),
                     official_entry: spec.official_entry.map(str::to_string),
-                    status: catalog_status(spec, is_installed),
-                    installed: is_installed,
+                    status: catalog_status(spec, presence),
+                    installed: presence.is_installed(),
+                    presence,
                     evidence: spec.evidence.to_string(),
                     limitation: spec.limitation.map(str::to_string),
                 }
@@ -292,6 +421,7 @@ impl UsageCenter {
             accounts: account_views,
             unconfirmed_pools,
             catalog,
+            catalog_scan: coverage.view(),
             last_attempt_at,
             last_success_at,
             note: OVERVIEW_NOTE.to_string(),
@@ -305,7 +435,9 @@ impl UsageCenter {
     pub fn refresh(&self, request: &UsageRefreshRequest) -> Result<UsageRefreshResult, AppError> {
         request.validate()?;
         let _gate = self.gate.lock();
-        let installed = self.installed_executables();
+        // One scan for the whole pass: ten providers must not ten-fold the
+        // cost of a process-wide directory walk.
+        let coverage = self.coverage();
         let mut outcomes = Vec::new();
         for spec in PROVIDERS {
             if let Some(agent_id) = &request.agent_id {
@@ -313,7 +445,7 @@ impl UsageCenter {
                     continue;
                 }
             }
-            let outcome = match self.refresh_one(spec, request.force, &installed) {
+            let outcome = match self.refresh_one(spec, request.force, &coverage) {
                 Ok(outcome) => outcome,
                 Err(error) => RefreshOutcome {
                     agent_id: spec.agent_id.to_string(),
@@ -321,6 +453,7 @@ impl UsageCenter {
                     skipped: false,
                     // The other providers still refresh; this one reports its
                     // real error instead of aborting the whole call.
+                    reason_code: Some(model::reason::READ_FAILED.to_string()),
                     reason: Some(format!("{}: {}", error.code.as_str(), error.message)),
                     retry_after_ms: error.details.get("retryAfterMs").and_then(|v| v.as_i64()),
                 },
@@ -335,19 +468,32 @@ impl UsageCenter {
         &self,
         spec: &'static ProviderSpec,
         force: bool,
-        installed: &std::collections::BTreeSet<String>,
+        coverage: &InstallationCoverage,
     ) -> Result<RefreshOutcome, AppError> {
-        let installation = self.installation_for(spec.agent_id, installed);
-        if installation.is_none() {
+        let Some(installation) = self.ensure_installation(spec, coverage)? else {
+            // "Not found" is only reported after a conclusive scan; an
+            // inconclusive one says so instead of claiming absence.
+            let presence = coverage.presence(spec.agent_id);
             return Ok(RefreshOutcome {
                 agent_id: spec.agent_id.to_string(),
                 status: UsageStatus::Unsupported,
                 skipped: true,
-                reason: Some("本机未注册该产品的安装；不创建空额度池".to_string()),
+                reason_code: Some(
+                    if presence == InstallPresence::Undiscovered {
+                        model::reason::NOT_DISCOVERED
+                    } else {
+                        model::reason::NOT_INSTALLED
+                    }
+                    .to_string(),
+                ),
+                reason: Some(if presence == InstallPresence::Undiscovered {
+                    "本次安装扫描不完整，尚未确认该产品是否安装；未创建额度池".to_string()
+                } else {
+                    "本机未安装该产品；不创建空额度池".to_string()
+                }),
                 retry_after_ms: None,
             });
-        }
-        let installation = installation.expect("checked");
+        };
         if !force {
             let conn = self.service.store().connection().lock();
             let state = repo::provider_state(&conn, spec.agent_id)?;
@@ -364,6 +510,7 @@ impl UsageCenter {
                             status: UsageStatus::parse(last_status)
                                 .unwrap_or(UsageStatus::Unknown),
                             skipped: true,
+                            reason_code: Some(model::reason::BACKOFF.to_string()),
                             reason: Some(format!(
                                 "退避中：下次尝试 {backoff}（上次：{last_status}）"
                             )),
@@ -375,7 +522,7 @@ impl UsageCenter {
         }
 
         let mut outcome = match spec.agent_id {
-            "codex" => self.refresh_codex(spec, &installation, &installed)?,
+            "codex" => self.refresh_codex(spec, &installation, coverage)?,
             "claude" => self.refresh_transcript(spec, &installation)?,
             _ => self.refresh_unavailable(spec, &installation)?,
         };
@@ -384,43 +531,72 @@ impl UsageCenter {
         Ok(outcome)
     }
 
-    /// Canonical executables of installations that the discovery registry
-    /// itself classified as `installed`. A registered row alone is not enough:
-    /// an IDE shim and a residue directory also produce rows, and neither is a
-    /// usable product installation.
-    fn installed_executables(&self) -> std::collections::BTreeSet<String> {
-        let registry = SignatureRegistry::standard();
-        let environment = ScannerEnvironment::from_process_env();
-        let scan = scan_installations(&registry, &environment, &self.host_id);
-        scan.installations
-            .iter()
-            .filter(|item| item.status == InstallStatus::Installed)
-            .filter_map(|item| item.executable.as_ref())
-            .filter_map(|path| path.canonical_path.as_deref())
-            .map(normalize_key)
-            .collect()
-    }
-
-    fn installation_for(
+    /// Resolves an installation row for this product, registering the physical
+    /// install first when discovery has not run yet.
+    ///
+    /// The catalogue and the refresh path both use this: a product that is
+    /// physically present but not yet registered must not be reported as
+    /// missing, and its quota must be readable on the first visit.
+    fn ensure_installation(
         &self,
-        agent_id: &str,
-        installed: &std::collections::BTreeSet<String>,
-    ) -> Option<crate::multicli::AgentInstallation> {
-        let installations = self.service.list_all_installations(&self.host_id).ok()?;
-        installations
+        spec: &'static ProviderSpec,
+        coverage: &InstallationCoverage,
+    ) -> Result<Option<crate::multicli::AgentInstallation>, AppError> {
+        let installations = self.service.list_all_installations(&self.host_id)?;
+        if let Some(found) = installations
             .into_iter()
-            .filter(|installation| installation.agent_id == agent_id)
+            .filter(|installation| installation.agent_id == spec.agent_id)
             .find(|installation| {
                 let Some(canonical) = installation.executable.canonical_path.as_deref() else {
                     return false;
                 };
-                installed.contains(&normalize_key(canonical))
+                coverage.installed_paths.contains(&normalize_key(canonical))
                     && PathBuf::from(canonical).is_file()
             })
+        {
+            return Ok(Some(found));
+        }
+        let Some(detected) = coverage.detected(spec.agent_id) else {
+            return Ok(None);
+        };
+        let Some(executable) = detected.executable.clone() else {
+            return Ok(None);
+        };
+        // Registering here is the same write discovery performs. It only ever
+        // records a physical entry that the scan classified as installed, so it
+        // cannot invent an installation from a brand word or a residue folder.
+        let registry = SignatureRegistry::standard();
+        let vendor = registry
+            .by_agent(spec.agent_id)
+            .map(|signature| signature.vendor)
+            .unwrap_or("unknown");
+        self.service.register_agent(&crate::multicli::AgentDefinition {
+            id: spec.agent_id.to_string(),
+            vendor: vendor.to_string(),
+            display_name: spec.product.to_string(),
+        })?;
+        let stored = self.service.register_discovered_installation(
+            &crate::multicli::AgentInstallation {
+                id: detected.install_id.clone(),
+                host_id: self.host_id.clone(),
+                agent_id: spec.agent_id.to_string(),
+                executable,
+                version: None,
+                config_profile_id: crate::multicli::discovery::detect::UNCONFIRMED_PROFILE
+                    .to_string(),
+            },
+            &detected.identity,
+            &detected.identity_kind,
+        )?;
+        Ok(Some(stored))
     }
 
-    fn codex_program(&self, installed: &std::collections::BTreeSet<String>) -> Option<PathBuf> {
-        if let Some(installation) = self.installation_for("codex", installed) {
+    fn codex_program(&self, coverage: &InstallationCoverage) -> Option<PathBuf> {
+        if let Some(installation) = self
+            .ensure_installation(provider_for("codex")?, coverage)
+            .ok()
+            .flatten()
+        {
             let path = PathBuf::from(
                 installation
                     .executable
@@ -445,9 +621,9 @@ impl UsageCenter {
         &self,
         spec: &'static ProviderSpec,
         installation: &crate::multicli::AgentInstallation,
-        installed: &std::collections::BTreeSet<String>,
+        coverage: &InstallationCoverage,
     ) -> Result<RefreshOutcome, AppError> {
-        let Some(program) = self.codex_program(installed) else {
+        let Some(program) = self.codex_program(coverage) else {
             let snapshot = self.failure_snapshot(
                 spec,
                 installation,
@@ -537,6 +713,7 @@ impl UsageCenter {
             agent_id: spec.agent_id.to_string(),
             status: snapshot.status,
             skipped: false,
+            reason_code: code_for_status(snapshot.status),
             reason: snapshot.note.clone(),
             retry_after_ms: snapshot.retry_after_ms,
         })
@@ -565,7 +742,11 @@ impl UsageCenter {
                     "hint": "在「历史」页启用该产品的只读来源根后，才能从本地转录统计 token",
                 })),
             )?;
-            return Ok(self.outcome_from(snapshot, spec, installation, None));
+            let mut outcome = self.outcome_from(snapshot, spec, installation, None);
+            // "Installed, but no read-only root is enabled" is a different
+            // situation from "this product has no readable surface at all".
+            outcome.reason_code = Some(model::reason::NO_USAGE_ROOTS.to_string());
+            return Ok(outcome);
         }
         let paths: Vec<PathBuf> = roots.iter().map(|(_, path)| PathBuf::from(path)).collect();
         let totals = transcript::scan_roots(&paths);
@@ -663,6 +844,7 @@ impl UsageCenter {
             agent_id: spec.agent_id.to_string(),
             status: snapshot.status,
             skipped: false,
+            reason_code: transcript_reason_code(snapshot.status, has_value, totals.files_read),
             reason: snapshot.note.clone(),
             retry_after_ms: snapshot.retry_after_ms,
         })
@@ -708,6 +890,7 @@ impl UsageCenter {
             agent_id: spec.agent_id.to_string(),
             status: UsageStatus::Unsupported,
             skipped: false,
+            reason_code: Some(model::reason::UNSUPPORTED_SOURCE.to_string()),
             reason: snapshot.note.clone(),
             retry_after_ms: None,
         })
@@ -882,6 +1065,7 @@ impl UsageCenter {
             agent_id: snapshot.agent_id.clone(),
             status: snapshot.status,
             skipped: false,
+            reason_code: code_for_status(snapshot.status),
             reason: snapshot
                 .note
                 .clone()
@@ -933,18 +1117,54 @@ impl UsageCenter {
     }
 }
 
-fn catalog_status(spec: &'static ProviderSpec, installed: bool) -> String {
-    if !installed {
-        return "unsupported".to_string();
-    }
-    if spec.quota_access == "none" && spec.token_access == "none" {
+/// Capability status for one catalogue row.
+///
+/// `presence` decides what may be claimed about *this host*; `spec` decides
+/// what the build can ever read. An inconclusive scan must not be reported as
+/// "not installed", so it stays `unverified` instead of `unsupported`.
+fn catalog_status(spec: &'static ProviderSpec, presence: InstallPresence) -> String {
+    let no_surface = spec.quota_access == "none" && spec.token_access == "none";
+    if no_surface {
         // Nothing at all can be read for this product, installed or not.
         return "unsupported".to_string();
     }
-    match spec.agent_id {
-        "codex" | "claude" => "supported".to_string(),
-        _ => "unverified".to_string(),
+    match presence {
+        InstallPresence::Installed => match spec.agent_id {
+            "codex" | "claude" => "supported".to_string(),
+            _ => "unverified".to_string(),
+        },
+        InstallPresence::NotInstalled => "unsupported".to_string(),
+        InstallPresence::Undiscovered => "unverified".to_string(),
     }
+}
+
+/// Stable reason code for a snapshot that did not simply succeed.
+fn code_for_status(status: UsageStatus) -> Option<String> {
+    let code = match status {
+        UsageStatus::Ok => return None,
+        UsageStatus::Partial => model::reason::PARTIAL,
+        UsageStatus::Stale => model::reason::UNKNOWN,
+        UsageStatus::Unauthenticated => model::reason::UNAUTHENTICATED,
+        UsageStatus::Unsupported => model::reason::UNSUPPORTED_SOURCE,
+        UsageStatus::RateLimited | UsageStatus::Error => model::reason::READ_FAILED,
+        UsageStatus::Unknown => model::reason::UNKNOWN,
+    };
+    Some(code.to_string())
+}
+
+/// A transcript pass that read files but found no numeric usage is reported as
+/// `no-number`, not as a generic partial. The two mean different things to the
+/// user: one says "some columns are missing", the other says "this pass has no
+/// usable number at all".
+fn transcript_reason_code(
+    status: UsageStatus,
+    has_value: bool,
+    files_read: usize,
+) -> Option<String> {
+    if files_read > 0 && !has_value {
+        return Some(model::reason::NO_NUMBER.to_string());
+    }
+    code_for_status(status)
 }
 
 /// Maps a read failure onto the visible state and the provider's own retry
@@ -1020,15 +1240,68 @@ mod catalogue_tests {
     #[test]
     fn catalog_status_never_upgrades_an_uninstalled_product() {
         let codex = provider_for("codex").unwrap();
-        assert_eq!(catalog_status(codex, false), "unsupported");
-        assert_eq!(catalog_status(codex, true), "supported");
+        assert_eq!(
+            catalog_status(codex, InstallPresence::NotInstalled),
+            "unsupported"
+        );
+        assert_eq!(
+            catalog_status(codex, InstallPresence::Installed),
+            "supported"
+        );
         let gemini = provider_for("gemini").unwrap();
         assert_eq!(
-            catalog_status(gemini, true),
+            catalog_status(gemini, InstallPresence::Installed),
             "unsupported",
             "a product with no readable surface stays unsupported even when installed"
         );
         let copilot = provider_for("copilot").unwrap();
-        assert_eq!(catalog_status(copilot, false), "unsupported");
+        assert_eq!(
+            catalog_status(copilot, InstallPresence::NotInstalled),
+            "unsupported"
+        );
+    }
+
+    #[test]
+    fn an_inconclusive_scan_is_not_reported_as_not_installed() {
+        let codex = provider_for("codex").unwrap();
+        // "I could not look" must never become "it is not there".
+        assert_eq!(
+            catalog_status(codex, InstallPresence::Undiscovered),
+            "unverified"
+        );
+        assert_ne!(
+            catalog_status(codex, InstallPresence::Undiscovered),
+            catalog_status(codex, InstallPresence::NotInstalled)
+        );
+    }
+
+    #[test]
+    fn an_inconclusive_scan_says_why_absence_is_unproven() {
+        let empty = CatalogScanView {
+            scanned_roots: 0,
+            entries_examined: 0,
+            unreadable_roots: 0,
+            truncated: false,
+            conclusive: false,
+            scanned_at: model::now_iso8601(),
+        };
+        assert_eq!(empty.inconclusive_reason(), Some("no-readable-root"));
+        let denied = CatalogScanView {
+            scanned_roots: 3,
+            unreadable_roots: 2,
+            ..empty.clone()
+        };
+        assert_eq!(denied.inconclusive_reason(), Some("unreadable-root"));
+        let truncated = CatalogScanView {
+            scanned_roots: 3,
+            truncated: true,
+            ..empty.clone()
+        };
+        assert_eq!(truncated.inconclusive_reason(), Some("scan-truncated"));
+        let complete = CatalogScanView {
+            scanned_roots: 5,
+            ..empty
+        };
+        assert_eq!(complete.inconclusive_reason(), None);
     }
 }

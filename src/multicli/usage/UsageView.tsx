@@ -4,6 +4,7 @@ import type { MultiCliApi } from "../api";
 import { Badge, ErrorPanel, LoadingPanel } from "../components";
 import type {
   AppError,
+  InstallPresence,
   PoolView,
   RefreshOutcome,
   UsageOverviewView,
@@ -105,6 +106,12 @@ function amountText(sample: UsageSample): string {
     return sample.estimated ? `≈ $${dollars}` : `$${dollars}`;
   }
   return sample.amount.toLocaleString();
+}
+
+function presenceTone(presence: InstallPresence): Tone {
+  if (presence === "installed") return "green";
+  if (presence === "undiscovered") return "amber";
+  return "neutral";
 }
 
 const windowKey: Record<string, string> = {
@@ -279,7 +286,13 @@ function PoolCard({ view, clock }: { view: PoolView; clock: number }) {
   );
 }
 
-export default function UsageView({ api }: { api: MultiCliApi }) {
+export default function UsageView({
+  api,
+  onOpenInstallations,
+}: {
+  api: MultiCliApi;
+  onOpenInstallations?: () => void;
+}) {
   const { t } = useTranslation("multicli");
   const [overview, setOverview] = useState<UsageOverviewView | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -465,13 +478,25 @@ export default function UsageView({ api }: { api: MultiCliApi }) {
               <section className="mt-4" data-testid="usage-outcomes">
                 <h3 className="text-xs font-semibold text-text-primary">{t("usageOutcomes")}</h3>
                 <ul className="mt-1 flex flex-col gap-1 text-[10px] text-text-tertiary">
-                  {outcomes.map((outcome) => (
-                    <li key={outcome.agentId}>
-                      <code>{outcome.agentId}</code> · {t(`usageStatus.${outcome.status}`)}
-                      {outcome.skipped ? ` · ${t("usageSkipped")}` : ""}
-                      {outcome.reason ? ` · ${outcome.reason}` : ""}
-                    </li>
-                  ))}
+                  {outcomes.map((outcome) => {
+                    const translated = outcome.reasonCode
+                      ? t(`usageReason.${outcome.reasonCode}`, {
+                          defaultValue: "",
+                          detail: outcome.reason ?? "",
+                        })
+                      : "";
+                    return (
+                      <li key={outcome.agentId} data-testid={`usage-outcome-${outcome.agentId}`}>
+                        <code>{outcome.agentId}</code> · {t(`usageStatus.${outcome.status}`)}
+                        {outcome.skipped ? ` · ${t("usageSkipped")}` : ""}
+                        {translated
+                          ? ` · ${translated}`
+                          : outcome.reason
+                            ? ` · ${outcome.reason}`
+                            : ""}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             ) : null}
@@ -479,11 +504,36 @@ export default function UsageView({ api }: { api: MultiCliApi }) {
             <section className="mt-4">
               <h3 className="text-xs font-semibold text-text-primary">{t("usageCatalogTitle")}</h3>
               <p className="mt-1 text-[10px] text-text-tertiary">{t("usageCatalogHint")}</p>
+              {overview.catalogScan && !overview.catalogScan.conclusive ? (
+                <div
+                  className="mt-2 rounded-md border border-border-warning-default/40 bg-background-tertiary-warning px-3 py-2 text-[10px] leading-4 text-state-warning-text"
+                  data-testid="usage-catalog-inconclusive"
+                >
+                  <p>{t("usageCatalogScanIncomplete", { roots: overview.catalogScan.scannedRoots })}</p>
+                  <p className="mt-1 text-text-secondary">
+                    {t("usageCatalogScanIncompleteHint", {
+                      unreadable: overview.catalogScan.unreadableRoots,
+                      scanned: overview.catalogScan.entriesExamined,
+                    })}
+                  </p>
+                  {onOpenInstallations ? (
+                    <button
+                      type="button"
+                      className="mt-1 rounded-md border border-separator-border px-2 py-0.5 text-[10px] text-text-secondary hover:bg-background-primary-hover"
+                      onClick={onOpenInstallations}
+                      data-testid="usage-catalog-open-installations"
+                    >
+                      {t("usageOpenInstallations")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="mt-2 overflow-x-auto">
                 <table className="w-full border-collapse text-left text-[11px]">
                   <thead>
                     <tr className="text-[10px] uppercase tracking-wide text-text-tertiary">
                       <th className="py-1 pr-2 font-medium">{t("usageCatalogProduct")}</th>
+                      <th className="py-1 pr-2 font-medium">{t("usageCatalogPresence")}</th>
                       <th className="py-1 pr-2 font-medium">{t("usageCatalogQuota")}</th>
                       <th className="py-1 pr-2 font-medium">{t("usageCatalogTokens")}</th>
                       <th className="py-1 pr-2 font-medium">{t("usageCatalogEntry")}</th>
@@ -492,19 +542,23 @@ export default function UsageView({ api }: { api: MultiCliApi }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {overview.catalog.map((entry) => (
+                    {overview.catalog.map((entry) => {
+                      // Older payloads (and the S06 counterexample fixture) only
+                      // carry `installed`; derive the same three-state meaning
+                      // instead of rendering an `undefined` label.
+                      const presence: InstallPresence =
+                        entry.presence ?? (entry.installed ? "installed" : "not-installed");
+                      return (
                       <tr
                         key={entry.agentId}
                         className="border-t border-separator-border"
                         data-testid={`usage-catalog-${entry.agentId}`}
                       >
-                        <td className="py-1 pr-2 text-text-primary">
-                          {entry.product}
-                          {entry.installed ? null : (
-                            <span className="ml-1 text-[9px] text-text-tertiary">
-                              ({t("usageNotInstalled")})
-                            </span>
-                          )}
+                        <td className="py-1 pr-2 text-text-primary">{entry.product}</td>
+                        <td className="py-1 pr-2" data-testid={`usage-presence-${entry.agentId}`}>
+                          <Badge tone={presenceTone(presence)}>
+                            {t(`usagePresence.${presence}`)}
+                          </Badge>
                         </td>
                         <td className="py-1 pr-2 text-text-secondary">
                           {t(`usageAccess.${entry.quotaAccess}`)}
@@ -530,7 +584,8 @@ export default function UsageView({ api }: { api: MultiCliApi }) {
                         </td>
                         <td className="py-1 text-text-tertiary">{entry.limitation ?? "—"}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -20,7 +20,16 @@ export type Entry = "workspaces" | "agents";
  * counts. This component is unchanged behaviourally; S02 only moved it out of
  * `App.tsx` so the discovery views can live beside it.
  */
-export default function SessionBrowser({ api, onResume }: { api: MultiCliApi; onResume?: (sessionId: string) => void }) {
+export default function SessionBrowser({
+  api,
+  onResume,
+  onNavigate,
+}: {
+  api: MultiCliApi;
+  onResume?: (sessionId: string) => void;
+  /** First-run guidance: an empty list points at the page that fills it. */
+  onNavigate?: (view: "history" | "installations" | "terminal" | "runtime") => void;
+}) {
   const [entry, setEntry] = useState<Entry>("workspaces");
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
@@ -142,6 +151,7 @@ export default function SessionBrowser({ api, onResume }: { api: MultiCliApi; on
           onSelectWorkspace={selectWorkspace}
           onSelectAgent={selectAgent}
           onRetry={refreshAll}
+          onOpenHistory={onNavigate ? () => onNavigate("history") : undefined}
         />
       </aside>
 
@@ -154,6 +164,7 @@ export default function SessionBrowser({ api, onResume }: { api: MultiCliApi; on
           onSelect={selectSession}
           onRefresh={refreshAll}
           onRetry={refreshAll}
+          onOpenHistory={onNavigate ? () => onNavigate("history") : undefined}
         />
       </section>
 

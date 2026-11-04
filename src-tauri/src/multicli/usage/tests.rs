@@ -16,10 +16,13 @@ use crate::multicli::error::ErrorCode;
 use crate::multicli::service::MultiCliService;
 use crate::multicli::store::{MigrationFault, SCHEMA_VERSION};
 use crate::multicli::usage::model::{
-    AccountProfile, IdentityStatus, QuotaPool, UsageSample, UsageSnapshot, UsageStatus,
+    AccountProfile, IdentityStatus, InstallPresence, QuotaPool, UsageSample, UsageSnapshot,
+    UsageStatus,
 };
 use crate::multicli::usage::repo;
-use crate::multicli::usage::{provider_for, UsageCenter, UsageRefreshRequest};
+use crate::multicli::usage::{
+    code_for_status, provider_for, transcript_reason_code, UsageCenter, UsageRefreshRequest,
+};
 
 const HOST_ID: &str = "local-windows";
 
@@ -282,6 +285,65 @@ fn an_unconfirmed_pool_is_never_merged_with_the_confirmed_one() {
 }
 
 #[test]
+fn reason_codes_distinguish_stale_and_missing_transcript_numbers() {
+    use crate::multicli::usage::model::reason;
+    assert_eq!(code_for_status(UsageStatus::Ok), None);
+    assert_eq!(
+        transcript_reason_code(UsageStatus::Partial, false, 3).as_deref(),
+        Some(reason::NO_NUMBER)
+    );
+    assert_eq!(
+        transcript_reason_code(UsageStatus::Partial, true, 3).as_deref(),
+        Some(reason::PARTIAL)
+    );
+    assert_eq!(
+        transcript_reason_code(UsageStatus::Unsupported, false, 0).as_deref(),
+        Some(reason::UNSUPPORTED_SOURCE)
+    );
+}
+
+#[test]
+fn an_unverified_candidate_keeps_the_product_undiscovered() {
+    use crate::multicli::discovery::detect::{
+        DetectedInstallation, InstallStatus, InstallationScan, UNCONFIRMED_PROFILE,
+    };
+    use crate::multicli::discovery::signature::EntryKind;
+
+    let candidate = DetectedInstallation {
+        agent_id: "codex".into(),
+        signature_id: "codex".into(),
+        product: "Codex CLI".into(),
+        status: InstallStatus::Unverified,
+        entry_kind: EntryKind::NativeExe,
+        executable: None,
+        runtime: None,
+        entry_script: None,
+        interpreter: None,
+        issue_code: Some("unverified-native-location".into()),
+        issue_reason: None,
+        discovered_from: "path".into(),
+        identity: "unverified-fixture".into(),
+        identity_kind: "canonical".into(),
+        config_profile_id: UNCONFIRMED_PROFILE.into(),
+        install_id: "install-fixture".into(),
+        entry_priority: 0,
+    };
+    let scan = InstallationScan {
+        installations: vec![candidate],
+        scanned_roots: 1,
+        entries_examined: 1,
+        unreadable_roots: 0,
+        truncated: false,
+    };
+    let coverage = super::InstallationCoverage::from_scan(scan);
+    assert_eq!(
+        coverage.presence("codex"),
+        InstallPresence::Undiscovered,
+        "an executable whose identity is unresolved is not proof of absence"
+    );
+}
+
+#[test]
 fn a_stale_snapshot_is_reported_as_stale_and_never_as_zero() {
     let root = TempRoot::new("stale");
     let service = open(&root);
@@ -452,6 +514,17 @@ fn refreshing_without_an_installation_creates_no_empty_pool() {
         std::sync::Arc::new(service),
         root.path.clone(),
     );
+    // A conclusive scan of the host that found no runnable entry. Freezing it
+    // keeps the assertion true on a machine where the product *is* installed:
+    // the rule under test is "absent product -> no pool", not "this host has
+    // no Codex".
+    center.set_test_coverage(crate::multicli::discovery::detect::InstallationScan {
+        scanned_roots: 5,
+        entries_examined: 120,
+        unreadable_roots: 0,
+        truncated: false,
+        installations: Vec::new(),
+    });
     let result = center
         .refresh(&UsageRefreshRequest {
             agent_id: Some("codex".into()),
@@ -461,8 +534,71 @@ fn refreshing_without_an_installation_creates_no_empty_pool() {
     assert_eq!(result.outcomes.len(), 1);
     assert!(result.outcomes[0].skipped);
     assert_eq!(result.outcomes[0].status, UsageStatus::Unsupported);
+    assert_eq!(
+        result.outcomes[0].reason_code.as_deref(),
+        Some("not-installed"),
+        "a conclusive absence has its own stable reason code"
+    );
     assert!(result.overview.unconfirmed_pools.is_empty());
     assert!(result.overview.accounts.is_empty());
+    assert!(result.overview.catalog_scan.conclusive);
+    let codex = result
+        .overview
+        .catalog
+        .iter()
+        .find(|entry| entry.agent_id == "codex")
+        .expect("catalogue entry");
+    assert_eq!(
+        codex.presence,
+        crate::multicli::usage::InstallPresence::NotInstalled
+    );
+    assert!(!codex.installed);
+}
+
+#[test]
+fn an_inconclusive_scan_never_claims_the_product_is_absent() {
+    let root = TempRoot::new("refresh-inconclusive");
+    let service = open(&root);
+    seed(&service);
+    let center = crate::multicli::usage::UsageCenter::new(
+        HOST_ID,
+        std::sync::Arc::new(service),
+        root.path.clone(),
+    );
+    // Two unreadable roots make the scan inconclusive even though nothing was
+    // found: "not seen" is not "not installed".
+    center.set_test_coverage(crate::multicli::discovery::detect::InstallationScan {
+        scanned_roots: 4,
+        entries_examined: 40,
+        unreadable_roots: 2,
+        truncated: false,
+        installations: Vec::new(),
+    });
+    let result = center
+        .refresh(&UsageRefreshRequest {
+            agent_id: Some("codex".into()),
+            force: true,
+        })
+        .unwrap();
+    assert_eq!(
+        result.outcomes[0].reason_code.as_deref(),
+        Some("not-discovered")
+    );
+    assert!(!result.overview.catalog_scan.conclusive);
+    let codex = result
+        .overview
+        .catalog
+        .iter()
+        .find(|entry| entry.agent_id == "codex")
+        .expect("catalogue entry");
+    assert_eq!(
+        codex.presence,
+        crate::multicli::usage::InstallPresence::Undiscovered
+    );
+    assert_eq!(
+        codex.status, "unverified",
+        "an unproven absence is not presented as a support verdict"
+    );
 }
 
 #[test]

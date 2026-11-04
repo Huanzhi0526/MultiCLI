@@ -87,16 +87,47 @@
 
 | 命令 | 输入 | 输出 |
 |---|---|---|
-| `multicli_usage_overview` | — | `UsageOverviewView`：`accounts[]`（账户 + 池 + 快照 + `lastGood`）、`unconfirmedPools[]`、`catalog[]`、`lastAttemptAt`、`lastSuccessAt`、`note` |
-| `multicli_usage_refresh` | `{agentId?, force?}` | `{overview, outcomes[]}`；`outcomes` 含 `status`、`skipped`、`reason`、`retryAfterMs` |
+| `multicli_usage_overview` | — | `UsageOverviewView`：`accounts[]`（账户 + 池 + 快照 + `lastGood`）、`unconfirmedPools[]`、`catalog[]`、`catalogScan`、`lastAttemptAt`、`lastSuccessAt`、`note` |
+| `multicli_usage_refresh` | `{agentId?, force?}` | `{overview, outcomes[]}`；`outcomes` 含 `status`、`skipped`、`reasonCode`、`reason`、`retryAfterMs` |
 | `multicli_custom_cli_list` | — | `CustomCliView[]` |
 | `multicli_custom_cli_create` | `{label, executable, args[], cwd?, productHint?}` | `CustomCliView` |
 | `multicli_custom_cli_delete` | `{id}` | `()` |
 
 所有失败返回真实 `AppError`。`multicli_usage_refresh` 默认遍历全部 provider，带 `agentId`
-时只处理该产品；单个 provider 失败不会中止其余产品（它自己的 `outcome` 带错误原因）。未安装的产品
-（`installed=false`，按发现注册表的 `installed` 状态判定，shim/残留不算）返回
-`skipped=true / unsupported`，**不创建空额度池**。两个命令都是异步命令，读取期间不阻塞窗口主线程。
+时只处理该产品；单个 provider 失败不会中止其余产品（它自己的 `outcome` 带错误原因）。两个命令
+都是异步命令，读取期间不阻塞窗口主线程。
+
+### 4.1 安装状态是三态（S07）
+
+`catalog[].presence` 是 `installed | not-installed | undiscovered`，`installed` 只是
+`presence === installed` 的派生字段。判定只来自**本次真实安装扫描**：
+
+- `installed`：扫描找到可运行的入口（与 S02 的 `installed` 状态同一证据，shim/残留不算）；
+- `not-installed`：扫描覆盖了全部声明根（`scannedRoots > 0`、`unreadableRoots == 0`、
+  `truncated == false`）且没有找到入口；
+- `undiscovered`：扫描不完整（无覆盖根、有不可读根或被截断）。**它不是「未安装」**，
+  对本身有可读表面的产品，`catalog[].status` 为 `unverified` 而不是 `unsupported`；
+  本身就没有可读表面的产品（quota/token 都是 `none`）仍是 `unsupported`。
+
+`catalogScan` 返回 `scannedRoots` / `entriesExamined` / `unreadableRoots` / `truncated` /
+`conclusive` / `scannedAt`，界面据此显示「本次扫描不完整」并提供去安装页重新扫描的入口。
+
+**惰性登记不再是漏报理由**：刷新时若数据库里没有该产品的安装行，但扫描发现了真实安装，读取路径
+会先按 S02 同一身份规则登记该安装（`install_id` / `identity` / `identityKind` 与发现页一致），
+再创建额度池；不再返回「未注册安装」。
+
+`outcomes[].reasonCode` 是稳定枚举，界面按 zh/en/ko 本地化；`reason` 保留后端原文作细节：
+
+| `reasonCode` | 含义 |
+|---|---|
+| `not-installed` | 扫描结论为未安装，未创建空池 |
+| `not-discovered` | 扫描不完整，未确认是否安装 |
+| `backoff` | 退避未到期，本次跳过 |
+| `no-usage-roots` | 已安装，但没有启用的只读历史根 |
+| `unsupported-source` | 产品没有已验证的机器可读来源 |
+| `no-number` | 读取完成但没有可用数值 |
+| `read-failed` | 读取失败（原文在 `reason`） |
+| `partial` / `unauthenticated` / `unknown` | 对应快照状态 |
 
 `force=false` 是普通刷新，遵守后端退避；`force=true` 只由界面上单独标注的强制动作传入，
 普通按钮与错误重试都不使用它。

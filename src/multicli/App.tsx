@@ -13,6 +13,7 @@ import TerminalWorkspace from "./terminal/TerminalWorkspace";
 import RuntimeView from "./runtime/RuntimeView";
 import UsageView from "./usage/UsageView";
 import CustomCliView from "./custom/CustomCliView";
+import DataView from "./data/DataView";
 import type { AppError, DiagnosticsExport, TerminalQuitCheckView } from "./types";
 import { toAppError } from "./navigation";
 
@@ -24,7 +25,8 @@ export type AppView =
   | "terminal"
   | "runtime"
   | "usage"
-  | "custom";
+  | "custom"
+  | "data";
 
 interface ExportState {
   status: "idle" | "pending" | "done" | "error";
@@ -41,6 +43,7 @@ const VIEWS: { id: AppView; label: string; testId: string }[] = [
   { id: "runtime", label: "navRuntime", testId: "view-runtime" },
   { id: "usage", label: "navUsage", testId: "view-usage" },
   { id: "custom", label: "navCustomCli", testId: "view-custom-cli" },
+  { id: "data", label: "navData", testId: "view-data" },
 ];
 
 const QUIT_REQUESTED_EVENT = "multicli://quit-requested";
@@ -134,7 +137,7 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-separator-border px-5 py-3">
         <div>
           <h1 className="text-base font-semibold">MultiCLI</h1>
-          <p className="text-[11px] text-text-tertiary">{t("stage")}</p>
+          <p className="text-[11px] text-text-tertiary">{t("tagline")}</p>
         </div>
         <nav
           className="flex flex-wrap gap-1 rounded-lg bg-background-secondary-default p-1"
@@ -205,7 +208,13 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
         ) : null}
       </header>
 
-      {view === "sessions" ? <SessionBrowser api={api} onResume={requestHistoryResume} /> : null}
+      {view === "sessions" ? (
+        <SessionBrowser
+          api={api}
+          onResume={requestHistoryResume}
+          onNavigate={setView}
+        />
+      ) : null}
       {view === "history" ? <HistoryView api={api} onResume={requestHistoryResume} /> : null}
       {view === "installations" ? <InstallationsView api={api} /> : null}
       {view === "processes" ? <ProcessesView api={api} /> : null}
@@ -226,8 +235,11 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
       >
         <RuntimeView api={api} visible={view === "runtime"} resumeRequest={resumeRequest} onResumeRequestHandled={handledResumeRequest} />
       </div>
-      {view === "usage" ? <UsageView api={api} /> : null}
+      {view === "usage" ? (
+        <UsageView api={api} onOpenInstallations={() => setView("installations")} />
+      ) : null}
       {view === "custom" ? <CustomCliView api={api} /> : null}
+      {view === "data" ? <DataView api={api} /> : null}
 
       {quit ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6">

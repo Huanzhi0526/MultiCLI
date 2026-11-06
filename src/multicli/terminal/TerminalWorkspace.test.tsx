@@ -483,7 +483,7 @@ describe("managed terminal workspace", () => {
     await flush();
     expect(byTestId(container, "terminal-target-reason")).not.toBeNull();
     await click(byTestId(container, "terminal-dialog-create"));
-    expect(byTestId(container, "terminal-dialog-error")).not.toBeNull();
+    expect((byTestId(container, "terminal-dialog-create") as HTMLButtonElement).disabled).toBe(true);
     expect(fake.opened).toHaveLength(0);
   });
 });

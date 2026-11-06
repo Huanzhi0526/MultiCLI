@@ -6,6 +6,7 @@ import { multiCliApi } from "./api";
 import type { MultiCliApi } from "./api";
 import { ErrorPanel } from "./components";
 import SessionBrowser from "./SessionBrowser";
+import HomeView from "./HomeView";
 import InstallationsView from "./discovery/InstallationsView";
 import ProcessesView from "./discovery/ProcessesView";
 import HistoryView from "./history/HistoryView";
@@ -14,10 +15,14 @@ import RuntimeView from "./runtime/RuntimeView";
 import UsageView from "./usage/UsageView";
 import CustomCliView from "./custom/CustomCliView";
 import DataView from "./data/DataView";
-import type { AppError, DiagnosticsExport, TerminalQuitCheckView } from "./types";
+import type { AppError, DiagnosticsExport, TerminalQuitCheckView, RuntimeStartInput } from "./types";
 import { toAppError } from "./navigation";
+import { MessagesSquare, History, Terminal, Play, Blocks, Activity, Gauge, SquareTerminal, Database, Plus } from "lucide-react";
+import { localTime } from "./presentation";
+import "./workbench.css";
 
 export type AppView =
+  | "home"
   | "sessions"
   | "history"
   | "installations"
@@ -50,7 +55,32 @@ const QUIT_REQUESTED_EVENT = "multicli://quit-requested";
 
 export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
   const { t } = useTranslation("multicli");
-  const [view, setView] = useState<AppView>("sessions");
+  const [theme, setTheme] = useState(() => { try { return localStorage.getItem("multicli.theme") || "system"; } catch { return "system"; } });
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const changed = () => setSystemDark(media?.matches ?? false);
+    media?.addEventListener("change", changed);
+    return () => media?.removeEventListener("change", changed);
+  }, []);
+  const dark = theme === "dark" || (theme === "system" && systemDark);
+  const { i18n } = useTranslation();
+  useEffect(() => {
+    try { const language = localStorage.getItem("multicli.language"); if (language && ["zh", "en", "ko"].includes(language)) void i18n.changeLanguage(language); } catch { /* Storage is optional. */ }
+  }, [i18n]);
+  const [view, setView] = useState<AppView>("home");
+  const [sidebarHost, setSidebarHost] = useState<HTMLDivElement | null>(null);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [startRequest, setStartRequest] = useState<{id: number; input: RuntimeStartInput} | null>(null);
+  const startPending = useRef(false);
+  const startSequence = useRef(0);
+  const requestNewRun = useCallback((input: RuntimeStartInput) => {
+    if (startPending.current || runtimeBusy) return;
+    startPending.current = true;
+    setStartRequest({id: ++startSequence.current, input});
+    setView("runtime");
+  }, [runtimeBusy]);
+  const handledStartRequest = useCallback(() => { startPending.current = false; setStartRequest(null); }, []);
   const [exportState, setExportState] = useState<ExportState>({ status: "idle" });
   const [quit, setQuit] = useState<TerminalQuitCheckView | null>(null);
   const [quitError, setQuitError] = useState<AppError | null>(null);
@@ -131,37 +161,13 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col bg-background-primary-default text-text-primary"
+      className={`mc-app flex h-full min-h-0 flex-col bg-background-primary-default text-text-primary ${dark ? "dark" : ""}`}
       data-testid="app-root"
     >
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-separator-border px-5 py-3">
+      <header className="mc-header flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-separator-border px-5 py-3">
         <div>
-          <h1 className="text-base font-semibold">MultiCLI</h1>
-          <p className="text-[11px] text-text-tertiary">{t("tagline")}</p>
+          <h1 className="text-base font-medium tracking-tight">{t(view === "home" ? "navHome" : VIEWS.find(item => item.id === view)!.label)}</h1>
         </div>
-        <nav
-          className="flex flex-wrap gap-1 rounded-lg bg-background-secondary-default p-1"
-          role="tablist"
-          aria-label={t("navLabel")}
-        >
-          {VIEWS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={view === item.id}
-              className={
-                view === item.id
-                  ? "rounded-md bg-background-primary-default px-3 py-1.5 text-xs font-medium text-text-primary shadow-sm"
-                  : "rounded-md px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary"
-              }
-              data-testid={item.testId}
-              onClick={() => setView(item.id)}
-            >
-              {t(item.label)}
-            </button>
-          ))}
-        </nav>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {exportState.status === "done" && exportState.result ? (
             <span
@@ -171,7 +177,7 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
             >
               {t("exportSuccess", {
                 path: exportState.result.path,
-                createdAt: exportState.result.createdAt,
+                createdAt: localTime(exportState.result.createdAt),
               })}
             </span>
           ) : null}
@@ -184,6 +190,23 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
           >
             {exportState.status === "pending" ? t("exporting") : t("exportDiagnostics")}
           </button>
+          <details className="mc-options">
+            <summary data-testid="app-options">{t("appOptions")}</summary>
+            <div className="mc-options-panel">
+              <div className="mb-4">
+                <p className="mb-2 text-xs font-medium">{t("appearance")}</p>
+                <div className="flex gap-1 rounded-md bg-background-secondary-default p-1" role="group" aria-label={t("appearance")}>
+                  {(["system", "light", "dark"] as const).map(value => <button key={value} type="button" data-testid={`theme-${value}`}
+                    aria-pressed={theme === value} className={`flex-1 rounded px-2 py-1.5 text-xs ${theme === value ? "bg-background-primary-default font-medium shadow-sm" : "text-text-secondary"}`}
+                    onClick={() => { setTheme(value); try { localStorage.setItem("multicli.theme", value); } catch { /* Applies for this session. */ } }}>
+                    {t({ system: "themeSystem", light: "themeLight", dark: "themeDark" }[value])}
+                  </button>)}
+                </div>
+              </div>
+              <label>{t("uiLanguage")}<select value={i18n.language} onChange={event => { void i18n.changeLanguage(event.target.value); try { localStorage.setItem("multicli.language", event.target.value); } catch { /* Applies for this session. */ } }}>
+                <option value="zh">中文</option><option value="en">English</option><option value="ko">한국어</option>
+              </select></label>
+              <p className="mb-3 text-xs leading-5 text-text-secondary">{t("diagnosticsHint")}</p>
           {/* Same path as the tray "退出": never quits without an explicit
               confirmation while this application still owns a terminal. */}
           <button
@@ -194,8 +217,10 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
           >
             {t("quitEntry")}
           </button>
+            </div>
+          </details>
         </div>
-        <p className="w-full text-[10px] text-text-tertiary">{t("diagnosticsHint")}</p>
+
         {exportState.status === "error" && exportState.error ? (
           <div className="w-full">
             <ErrorPanel
@@ -208,11 +233,35 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
         ) : null}
       </header>
 
+      <div className="mc-body">
+        <nav className="mc-nav" aria-label={t("navLabel")}>
+          <div className="mc-brand"><span className="mc-brand-mark"><Terminal aria-hidden="true" /></span><strong>MultiCLI</strong><small>Workbench</small></div>
+          <button type="button" className="mc-new-chat" data-testid="view-home" aria-current={view === "home" ? "page" : undefined} onClick={() => setView("home")}><Plus aria-hidden="true" /><span>{t("navNewChat")}</span></button>
+          {([
+            { label: "navWork", ids: ["sessions", "history", "terminal", "runtime"] },
+            { label: "navEnvironment", ids: ["installations", "processes", "custom"] },
+            { label: "navSystem", ids: ["usage", "data"] },
+          ]).map(group => <div className="mc-nav-group" key={group.label}>
+            <p>{t(group.label)}</p>
+            <div role="tablist" aria-label={t(group.label)}>{group.ids.map(id => {
+              const item = VIEWS.find(item => item.id === id)!;
+              const Icon = { home: Plus, sessions: MessagesSquare, history: History, terminal: Terminal, runtime: Play, installations: Blocks, processes: Activity, custom: SquareTerminal, usage: Gauge, data: Database }[item.id];
+              return <button type="button" key={id} role="tab" aria-selected={view === id} data-testid={item.testId} onClick={() => setView(item.id)}><Icon aria-hidden="true" /><span>{t(item.label)}</span></button>;
+            })}</div>
+            {group.label === "navWork" ? <div className="mc-scope-slot" ref={setSidebarHost} hidden={view !== "sessions"} /> : null}
+          </div>)}
+          <p className="mc-nav-footer">{t("tagline")}</p>
+        </nav>
+        <div className="mc-content">
+      <div className={view === "home" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+        <HomeView api={api} visible={view === "home"} busy={runtimeBusy || Boolean(startRequest)} onStart={requestNewRun} onNavigate={setView} />
+      </div>
       {view === "sessions" ? (
         <SessionBrowser
           api={api}
           onResume={requestHistoryResume}
           onNavigate={setView}
+          sidebarHost={sidebarHost}
         />
       ) : null}
       {view === "history" ? <HistoryView api={api} onResume={requestHistoryResume} /> : null}
@@ -225,7 +274,7 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
         className={view === "terminal" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
         data-testid="terminal-host"
       >
-        <TerminalWorkspace api={api} visible={view === "terminal"} />
+        <TerminalWorkspace api={api} dark={dark} visible={view === "terminal"} />
       </div>
       {/* The runtime view stays mounted for the same reason as the terminal:
           a structured run keeps its connection while another page is shown. */}
@@ -233,13 +282,16 @@ export default function App({ api = multiCliApi }: { api?: MultiCliApi }) {
         className={view === "runtime" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
         data-testid="runtime-host"
       >
-        <RuntimeView api={api} visible={view === "runtime"} resumeRequest={resumeRequest} onResumeRequestHandled={handledResumeRequest} />
+        <RuntimeView api={api} onOpenInstallations={() => setView("installations")} visible={view === "runtime"} resumeRequest={resumeRequest} onResumeRequestHandled={handledResumeRequest} startRequest={startRequest} onStartRequestHandled={handledStartRequest} onBusyChange={setRuntimeBusy} />
       </div>
       {view === "usage" ? (
         <UsageView api={api} onOpenInstallations={() => setView("installations")} />
       ) : null}
       {view === "custom" ? <CustomCliView api={api} /> : null}
       {view === "data" ? <DataView api={api} /> : null}
+
+        </div>
+      </div>
 
       {quit ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6">

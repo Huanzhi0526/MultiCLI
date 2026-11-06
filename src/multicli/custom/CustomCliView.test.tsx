@@ -115,8 +115,8 @@ describe("custom CLI presets", () => {
     await render(fakeApi([entry()], { created: [], deleted: [] }));
     const row = byTestId("custom-cli-row-custom-1");
     expect(row.textContent).toContain("我的工具");
-    expect(row.textContent).toContain("user-local-import");
-    expect(row.textContent).toContain("unsupported / unsupported");
+    expect(row.textContent).toContain("本地添加");
+    expect(row.textContent).toContain("暂不支持 / 暂不支持");
     expect(row.textContent).toContain("--version · 中文 参数");
   });
 

@@ -313,8 +313,8 @@ describe("usage centre", () => {
   it("lists the provider catalogue with manual entries and limitations", async () => {
     await render(fakeApi(overview()));
     const codex = byTestId("usage-catalog-codex");
-    expect(codex.textContent).toContain("machine");
-    expect(codex.textContent).toContain("supported");
+    expect(codex.textContent).toContain("官方接口");
+    expect(codex.textContent).toContain("支持");
     const buddy = byTestId("usage-catalog-codebuddy");
     expect(buddy.textContent).toContain("/cost");
     expect(buddy.textContent).toContain("manual only");
@@ -466,6 +466,7 @@ describe("usage centre", () => {
       ],
     });
     await render(fakeApi(mixed));
+    await act(async () => { byTestId("usage-other-products").click(); });
     expect(byTestId("usage-presence-gemini").textContent).toContain("尚未确认");
     expect(byTestId("usage-presence-aider").textContent).toContain("已确认未安装");
     // The old copy conflated both states into one word.

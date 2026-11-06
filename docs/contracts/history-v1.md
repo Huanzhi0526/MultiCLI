@@ -229,7 +229,8 @@ native/acp/pty 连接）。`sourceNamespace = "history:<agent>:<product>:<config
 | `sessionId` / `agentId` / `product?` / `nativeId?` / `sourceNamespace` | 同一会话身份 |
 | `configProfileId?` | 来自来源配置 |
 | `status` | `resolved / blocked / unknown / unsupported` |
-| `reason` | 固定、可展示的说明 |
+| `reasonCode` | 稳定的本地化原因码：`resolved`、`missing-native-id`、`agent-not-in-history-products`、`active-run`、`live-process-same-workspace`、`live-process-unlinked`、`installation-not-confirmed`；前端对未知码显示通用受限说明，不推断成功 |
+| `reason` | 原始诊断说明，收在技术详情中 |
 | `installationId?` / `executable?` | 已登记安装；不猜 |
 | `workspaces[]` | 会话工作区 |
 | `conflicts[]` | `{kind, detail}`：`active-run` / `live-external-process` / `missing-native-id` |
@@ -379,3 +380,5 @@ v5 重建 `history_message_origins`、v6 重建 `history_file_blocks`（均关�
   进入数据库、日志或 UI。
 - `sourceRef` 形如 `path:<hash>#L<行号>`，不含真实路径。
 - 诊断文件不新增正文、nativeId 或用户路径。
+
+界面“继续会话”由一次明确点击触发：先调用只读解析，仅当返回同一 `sessionId`、`status=resolved` 且 `executionAvailable=true` 时，转交独立 `runtime_resume`。查看会话不自动检查或执行。检查期间禁用按钮，切换会话或卸载后丢弃晚到结果。旧二进制缺少 `reasonCode` 时，只从已有稳定冲突/证据码推导提示，原文保留于技术详情。

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { TechnicalDetails } from "../presentation";
 import type { MultiCliApi } from "../api";
 import type {
-  RuntimeCapabilityStatus,
-  RuntimeCapabilityView,
+  RuntimeStartInput,
   RuntimePermissionView,
   RuntimeRunView,
   RuntimeToolView,
@@ -25,6 +25,7 @@ import {
   previewText,
 } from "./runtimeModel";
 import { useRuntime } from "./useRuntime";
+import NewRunComposer from "./NewRunComposer";
 
 const TONE_CLASS: Record<string, string> = {
   ok: "text-state-success-text",
@@ -32,56 +33,6 @@ const TONE_CLASS: Record<string, string> = {
   bad: "text-text-error-primary",
   muted: "text-text-tertiary",
 };
-
-const STATUS_CLASS: Record<RuntimeCapabilityStatus, string> = {
-  supported: "bg-state-success-base text-state-success-text",
-  unsupported: "bg-background-tertiary-error text-text-error-primary",
-  unverified: "bg-background-secondary-default text-text-secondary",
-};
-
-function CapabilityBadge({
-  label,
-  status,
-}: {
-  label: string;
-  status: RuntimeCapabilityStatus;
-}) {
-  return (
-    <span
-      className={`rounded px-1.5 py-0.5 text-[10px] ${STATUS_CLASS[status] ?? STATUS_CLASS.unverified}`}
-      data-testid={`runtime-capability-${label}`}
-    >
-      {label}:{status}
-    </span>
-  );
-}
-
-function CapabilityRow({ item }: { item: RuntimeCapabilityView }) {
-  const { t } = useTranslation("multicli");
-  return (
-    <div
-      className="rounded-md border border-separator-border p-2"
-      data-testid={`runtime-capability-row-${item.product}`}
-    >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-xs font-medium">{item.productName}</span>
-        <span className="text-[10px] text-text-tertiary">
-          {item.version ?? t("runtimeVersionUnknown")} · {item.transport}
-        </span>
-      </div>
-      <div className="mt-1 flex flex-wrap gap-1">
-        <CapabilityBadge label={t("runtimeFieldChat")} status={item.structuredChat} />
-        <CapabilityBadge label={t("runtimeFieldPermission")} status={item.permissionFlow} />
-        <CapabilityBadge label={t("runtimeFieldTools")} status={item.toolEvents} />
-        <CapabilityBadge label={t("runtimeFieldCancel")} status={item.cancel} />
-        <CapabilityBadge label={t("runtimeFieldResume")} status={item.resume} />
-      </div>
-      <p className="mt-1 text-[10px] text-text-tertiary">
-        {t("runtimeEvidence")}: {item.evidence} · {item.reason ?? ""}
-      </p>
-    </div>
-  );
-}
 
 function ToolCard({ tool }: { tool: RuntimeToolView }) {
   const { t } = useTranslation("multicli");
@@ -193,7 +144,7 @@ function RunHeader({
       <div className="flex flex-wrap items-baseline gap-2">
         <h2 className="text-sm font-semibold">{run.title}</h2>
         <span className="rounded bg-background-secondary-default px-1.5 py-0.5 text-[10px] text-text-secondary">
-          {run.productName} · {run.transport}
+          {run.productName} · {t(`value.${run.transport}`, { defaultValue: run.transport })}
         </span>
         <span className="text-[10px] text-text-tertiary" data-testid="runtime-execution-state">
           {t(`runtimeExecution.${run.executionState}`)}
@@ -222,6 +173,7 @@ function RunHeader({
           </button>
         </div>
       </div>
+      <TechnicalDetails>
       <p className="mt-1 truncate font-mono text-[10px] text-text-tertiary">
         run:{run.runId} · session:{run.sessionId} · native:
         {run.nativeSessionId ?? t("runtimeNativeUnknown")} · pid:
@@ -232,104 +184,7 @@ function RunHeader({
           {run.launchArgv.join(" ")}
         </p>
       ) : null}
-    </div>
-  );
-}
-
-function NewRunForm({
-  capabilities,
-  busy,
-  onStart,
-}: {
-  capabilities: RuntimeCapabilityView[];
-  busy: boolean;
-  onStart: (installationId: string, cwd: string, prompt: string) => void;
-}) {
-  const { t } = useTranslation("multicli");
-  const candidates = capabilities.filter((item) => item.installationId !== null);
-  const [installationId, setInstallationId] = useState(candidates[0]?.installationId ?? "");
-  const [cwd, setCwd] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [localError, setLocalError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!installationId && candidates.length > 0) {
-      setInstallationId(candidates[0].installationId ?? "");
-    }
-  }, [candidates, installationId]);
-
-  const submit = () => {
-    if (!installationId) {
-      setLocalError(t("runtimeErrorNoInstallation"));
-      return;
-    }
-    if (!cwd.trim()) {
-      setLocalError(t("runtimeErrorCwdRequired"));
-      return;
-    }
-    if (!prompt.trim()) {
-      setLocalError(t("runtimeErrorPromptRequired"));
-      return;
-    }
-    setLocalError(null);
-    onStart(installationId, cwd.trim(), prompt);
-  };
-
-  return (
-    <div className="rounded-md border border-separator-border p-2" data-testid="runtime-new-form">
-      <p className="text-xs font-medium">{t("runtimeNewTitle")}</p>
-      <label className="mt-2 block text-[10px] text-text-secondary">
-        {t("runtimeTargetLabel")}
-        <select
-          className="mt-1 w-full rounded border border-separator-border bg-background-primary-default px-2 py-1 text-[11px]"
-          value={installationId}
-          data-testid="runtime-target-select"
-          onChange={(event) => setInstallationId(event.target.value)}
-        >
-          {candidates.length === 0 ? (
-            <option value="">{t("runtimeErrorNoInstallation")}</option>
-          ) : null}
-          {candidates.map((item) => (
-            <option key={item.installationId ?? item.product} value={item.installationId ?? ""}>
-              {item.productName} {item.version ?? ""}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="mt-2 block text-[10px] text-text-secondary">
-        {t("runtimeCwdLabel")}
-        <input
-          className="mt-1 w-full rounded border border-separator-border bg-background-primary-default px-2 py-1 font-mono text-[11px]"
-          value={cwd}
-          placeholder="C:\\Work\\project"
-          data-testid="runtime-cwd-input"
-          onChange={(event) => setCwd(event.target.value)}
-        />
-      </label>
-      <label className="mt-2 block text-[10px] text-text-secondary">
-        {t("runtimePromptLabel")}
-        <textarea
-          className="mt-1 h-20 w-full rounded border border-separator-border bg-background-primary-default px-2 py-1 text-[11px]"
-          value={prompt}
-          data-testid="runtime-prompt-input"
-          onChange={(event) => setPrompt(event.target.value)}
-        />
-      </label>
-      <p className="mt-1 text-[10px] text-text-tertiary">{t("runtimeStartHint")}</p>
-      {localError ? (
-        <p className="mt-1 text-[10px] text-text-error-primary" data-testid="runtime-form-error">
-          {localError}
-        </p>
-      ) : null}
-      <button
-        type="button"
-        className="mt-2 w-full rounded bg-background-primary-default px-2 py-1 text-[11px] shadow-sm ring-1 ring-separator-border hover:bg-background-primary-hover disabled:opacity-50"
-        disabled={busy || candidates.length === 0}
-        onClick={submit}
-        data-testid="runtime-start"
-      >
-        {busy ? t("runtimeStarting") : t("runtimeStart")}
-      </button>
+      </TechnicalDetails>
     </div>
   );
 }
@@ -339,8 +194,16 @@ export default function RuntimeView({
   visible = true,
   resumeRequest,
   onResumeRequestHandled,
+  onOpenInstallations,
+  startRequest,
+  onStartRequestHandled,
+  onBusyChange,
 }: {
   api: MultiCliApi;
+  startRequest?: {id: number; input: RuntimeStartInput} | null;
+  onStartRequestHandled?: () => void;
+  onBusyChange?: (busy: boolean) => void;
+  onOpenInstallations?: () => void;
   visible?: boolean;
   resumeRequest?: {id: number; sessionId: string} | null;
   onResumeRequestHandled?: () => void;
@@ -353,6 +216,13 @@ export default function RuntimeView({
   const capabilities = rt.capabilities?.items ?? [];
   const pending = useMemo(() => pendingPermissions(rt.run), [rt.run]);
   const history = useMemo(() => permissionHistory(rt.run), [rt.run]);
+  const handledStart = useRef<number | null>(null);
+  useEffect(() => { onBusyChange?.(rt.busy); }, [rt.busy, onBusyChange]);
+  useEffect(() => {
+    if (!startRequest || handledStart.current === startRequest.id) return;
+    handledStart.current = startRequest.id;
+    void rt.start(startRequest.input).finally(() => onStartRequestHandled?.());
+  }, [startRequest, rt.start, onStartRequestHandled]);
   const handledResume = useRef<number | null>(null);
   useEffect(() => {
     if (!resumeRequest || handledResume.current === resumeRequest.id) return;
@@ -372,7 +242,7 @@ export default function RuntimeView({
   }, [rt.run?.messages, rt.run?.tools]);
 
   const submitDraft = useCallback(() => {
-    if (!draft.trim() || !canSend(rt.run)) return;
+    if (rt.busy || !draft.trim() || !canSend(rt.run)) return;
     const text = draft;
     setDraft("");
     void rt.send(text);
@@ -386,27 +256,11 @@ export default function RuntimeView({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="runtime-view">
-      <div className="grid shrink-0 grid-cols-3 gap-2 border-b border-separator-border p-2">
-        {capabilities.length === 0 ? (
-          <p className="col-span-3 text-[11px] text-text-tertiary">
-            {rt.capabilitiesError
-              ? t("runtimeCapabilitiesError", { message: rt.capabilitiesError.message })
-              : t("runtimeCapabilitiesEmpty")}
-          </p>
-        ) : (
-          capabilities.map((item) => (
-            <CapabilityRow key={`${item.product}-${item.installationId ?? "none"}`} item={item} />
-          ))
-        )}
-      </div>
+      {rt.capabilitiesError ? <p className="p-3 text-xs text-text-secondary" role="status">{t("runtimeCapabilitiesError", { message: rt.capabilitiesError.message })}</p> : null}
 
-      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[16rem_minmax(0,1fr)_20rem]">
-        <aside className="flex min-h-0 flex-col gap-2 overflow-auto border-r border-separator-border p-2">
-          <NewRunForm
-            capabilities={capabilities}
-            busy={rt.busy}
-            onStart={(installationId, cwd, prompt) => void rt.start({ installationId, cwd, prompt })}
-          />
+      <div className={`mc-runtime-grid grid min-h-0 min-w-0 flex-1 ${rt.run ? "" : "mc-no-run"}`}>
+        {rt.run ? <aside className="mc-run-sidebar flex min-h-0 flex-col gap-2 overflow-auto border-r border-separator-border p-3">
+          <NewRunComposer capabilities={capabilities} busy={rt.busy} compact onStart={input => void rt.start(input)} onOpenInstallations={onOpenInstallations} />
           <div className="text-[10px] uppercase tracking-wide text-text-tertiary">
             {t("runtimeRuns")}
           </div>
@@ -431,7 +285,7 @@ export default function RuntimeView({
               </div>
             </button>
           ))}
-        </aside>
+        </aside> : null}
 
         <main className="flex min-h-0 min-w-0 flex-col">
           {rt.run ? (
@@ -476,7 +330,7 @@ export default function RuntimeView({
                   </p>
                 ) : null}
               </div>
-              <div className="border-t border-separator-border p-2">
+              <div className="mc-active-composer border-t border-separator-border p-3">
                 <div className="flex items-end gap-2">
                   <textarea
                     className="h-16 flex-1 rounded border border-separator-border bg-background-primary-default px-2 py-1 text-[12px]"
@@ -485,7 +339,7 @@ export default function RuntimeView({
                     data-testid="runtime-composer"
                     onChange={(event) => setDraft(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) {
                         event.preventDefault();
                         submitDraft();
                       }
@@ -517,13 +371,16 @@ export default function RuntimeView({
               </div>
             </>
           ) : (
-            <div className="flex flex-1 items-center justify-center p-6 text-center text-[11px] text-text-tertiary">
-              {t("runtimeNoRunSelected")}
+            <div className="mc-runtime-welcome">
+              <h2>{t("homeGreeting")}</h2>
+              <p>{t("homeSubtitle")}</p>
+              <NewRunComposer capabilities={capabilities} busy={rt.busy || Boolean(rt.capabilitiesError)} onStart={input => void rt.start(input)} onOpenInstallations={onOpenInstallations} />
+              {rt.runs.length > 0 ? <div className="mc-recent-runs"><p>{t("runtimeRuns")}</p>{rt.runs.map(item => <button type="button" key={item.runId} data-testid={`runtime-run-${item.runId}`} onClick={() => rt.selectRun(item.runId)}>{item.title} · {item.productName}</button>)}</div> : null}
             </div>
           )}
         </main>
 
-        <aside className="flex min-h-0 flex-col gap-2 overflow-auto border-l border-separator-border p-2">
+        {rt.run ? <aside className="mc-runtime-permissions flex min-h-0 flex-col gap-2 overflow-auto border-l border-separator-border p-2">
           <p className="text-[10px] uppercase tracking-wide text-text-tertiary">
             {t("runtimePermissions")}
           </p>
@@ -578,7 +435,7 @@ export default function RuntimeView({
               {t("runtimeStartedAt")}: {formatTimestamp(rt.run.startedAt)}
             </p>
           ) : null}
-        </aside>
+        </aside> : null}
       </div>
 
       {rt.error ? (

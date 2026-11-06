@@ -233,7 +233,7 @@ export const SESSION_DETAIL_PAGE_SIZE = 100;
 
 export interface SessionDetailViewData {
   session: Session;
-  workspaces: SessionWorkspace[];
+  workspaces: (SessionWorkspace & { path?: import("./types").HostPath | null })[];
   runs: Run[];
   messages: Message[];
   messageCount: number;
@@ -410,6 +410,7 @@ function buildSessionDetail(
       workspaceId: link.workspaceId,
       role: link.role,
       evidence: link.evidence,
+      path: link.path,
     })),
     runs: metadata.runs,
     messages,

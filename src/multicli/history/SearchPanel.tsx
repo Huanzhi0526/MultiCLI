@@ -1,3 +1,4 @@
+import { localTime, pathName, TechnicalDetails } from "../presentation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MultiCliApi } from "../api";
@@ -130,7 +131,7 @@ export default function SearchPanel({
             <option value="">{t("historyFilterWorkspace")}: {t("historyFilterAll")}</option>
             {workspaces.items.map((item) => (
               <option key={item.workspace.id} value={item.workspace.id}>
-                {item.workspace.path.displayPath}
+                {pathName(item.workspace.path.displayPath)}
               </option>
             ))}
           </select>
@@ -144,7 +145,7 @@ export default function SearchPanel({
             </button>
           ) : null}
         </div>
-        <p className="text-[10px] leading-4 text-text-tertiary">{t("historySearchHint")}</p>
+        <TechnicalDetails label={t("help")}><p>{t("historySearchHint")}</p></TechnicalDetails>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
@@ -172,6 +173,7 @@ export default function SearchPanel({
                 testId="history-browse-empty"
               />
             ) : null}
+            {sources.length === 0 && browse.items.length > 0 ? <p className="mb-3 text-xs leading-5 text-text-tertiary">{t("historyCachedHint")}</p> : null}
             <ul className="flex flex-col gap-1">
               {browse.items.map((item) => (
                 <li key={item.session.id}>
@@ -217,7 +219,7 @@ export default function SearchPanel({
           <>
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] text-text-tertiary">
               <Badge tone={search.matchMode === "fts" ? "blue" : "amber"}>
-                {t("historySearchMode", { mode: search.matchMode })}
+                {t(search.matchMode === "fts" ? "historySearchNoteFts" : "historySearchNoteLike")}
               </Badge>
               <span>
                 {search.matchMode === "fts"
@@ -256,8 +258,8 @@ export default function SearchPanel({
                     </span>
                     <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-text-tertiary">
                       <code>{hit.agentId}</code>
-                      <code>{hit.kind}</code>
-                      <span>{hit.observedAt}</span>
+                      <span>{t(`value.${hit.kind}`, { defaultValue: hit.kind })}</span>
+                      <span>{localTime(hit.observedAt)}</span>
                       <span>{t("messageCount", { count: hit.sessionMessageCount })}</span>
                     </span>
                     <span className="mt-1 block whitespace-pre-wrap text-[11px] leading-4 text-text-secondary">

@@ -514,6 +514,7 @@ pub struct ResumeTargetView {
     /// `resolved | blocked | unknown | unsupported`
     pub status: String,
     pub reason: String,
+    pub reason_code: String,
     pub installation_id: Option<String>,
     pub executable: Option<HostPath>,
     pub workspaces: Vec<HostPath>,

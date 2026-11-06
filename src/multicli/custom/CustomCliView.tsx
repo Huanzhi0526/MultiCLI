@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { PathInput } from "../presentation";
 import type { MultiCliApi } from "../api";
 import { Badge, ErrorPanel, LoadingPanel } from "../components";
 import type { AppError, CustomCliView } from "../types";
@@ -152,23 +153,11 @@ export default function CustomCliView({ api }: { api: MultiCliApi }) {
             </label>
             <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-text-tertiary">
               {t("customCliExecutable")}
-              <input
-                className="rounded-md border border-separator-border bg-background-primary-default px-2 py-1 font-mono text-xs text-text-primary"
-                value={form.executable}
-                onChange={(event) => setForm({ ...form, executable: event.target.value })}
-                placeholder="C:\\path\\to\\tool.exe"
-                data-testid="custom-cli-executable"
-              />
+              <PathInput value={form.executable} onChange={value => setForm({ ...form, executable: value })} directory={false} placeholder={'C:\\path\\to\\tool.exe'} testId="custom-cli-executable" />
             </label>
             <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-text-tertiary">
               {t("customCliCwd")}
-              <input
-                className="rounded-md border border-separator-border bg-background-primary-default px-2 py-1 font-mono text-xs text-text-primary"
-                value={form.cwd}
-                onChange={(event) => setForm({ ...form, cwd: event.target.value })}
-                placeholder="D:\\Work"
-                data-testid="custom-cli-cwd"
-              />
+              <PathInput value={form.cwd} onChange={value => setForm({ ...form, cwd: value })} directory={true} placeholder={'D:\\Work'} testId="custom-cli-cwd" />
             </label>
             <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-text-tertiary">
               {t("customCliProductHint")}
@@ -185,7 +174,7 @@ export default function CustomCliView({ api }: { api: MultiCliApi }) {
                 className="h-24 rounded-md border border-separator-border bg-background-primary-default px-2 py-1 font-mono text-xs text-text-primary"
                 value={form.argsText}
                 onChange={(event) => setForm({ ...form, argsText: event.target.value })}
-                placeholder={"--version\n中文 参数"}
+                placeholder={t("customCliArgsPlaceholder")}
                 data-testid="custom-cli-args"
               />
             </label>
@@ -229,8 +218,8 @@ export default function CustomCliView({ api }: { api: MultiCliApi }) {
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium text-text-primary">{item.label}</span>
-                <Badge tone="blue">{item.launchChain}</Badge>
-                <Badge tone="neutral">{item.verification}</Badge>
+                <Badge tone="blue">{t(`value.${item.launchChain}`, { defaultValue: item.launchChain })}</Badge>
+                <Badge tone="neutral">{t(`value.${item.verification}`, { defaultValue: item.verification })}</Badge>
                 <code className="text-[10px] text-text-tertiary">{item.id}</code>
                 <button
                   type="button"
@@ -251,11 +240,11 @@ export default function CustomCliView({ api }: { api: MultiCliApi }) {
                 {item.executable.displayPath}
               </p>
               <p className="mt-0.5 font-mono text-[10px] break-all text-text-tertiary">
-                argv: {item.args.length === 0 ? "—" : item.args.join(" · ")}
+                {t("customCliArgs")}: {item.args.length === 0 ? "—" : item.args.join(" · ")}
               </p>
               <p className="mt-0.5 text-[10px] text-text-tertiary">
                 {t("customCliCwdValue")}: {item.cwd ?? "—"} · {t("customCliAccess")}:{" "}
-                {item.historyAccess} / {item.quotaAccess}
+                {t(`value.${item.historyAccess}`, { defaultValue: item.historyAccess })} / {t(`value.${item.quotaAccess}`, { defaultValue: item.quotaAccess })}
               </p>
             </li>
           ))}

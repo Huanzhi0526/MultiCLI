@@ -1,3 +1,4 @@
+import { TechnicalDetails } from "../presentation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MultiCliApi } from "../api";
@@ -110,7 +111,7 @@ function amountText(sample: UsageSample): string {
 
 function presenceTone(presence: InstallPresence): Tone {
   if (presence === "installed") return "green";
-  if (presence === "undiscovered") return "amber";
+  if (presence === "undiscovered") return "neutral";
   return "neutral";
 }
 
@@ -294,6 +295,7 @@ export default function UsageView({
   onOpenInstallations?: () => void;
 }) {
   const { t } = useTranslation("multicli");
+  const [showOtherProducts, setShowOtherProducts] = useState(false);
   const [overview, setOverview] = useState<UsageOverviewView | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<AppError | null>(null);
@@ -398,7 +400,7 @@ export default function UsageView({
         </button>
         <button
           type="button"
-          className="rounded-md px-2 py-1 text-[10px] text-text-tertiary underline decoration-dotted underline-offset-2 hover:text-text-secondary disabled:opacity-60"
+          className="rounded-md border border-separator-border px-3 py-1 text-xs text-text-secondary hover:bg-background-primary-hover disabled:opacity-60"
           onClick={() => void refresh(true)}
           disabled={busy}
           title={t("usageRefreshForceHint")}
@@ -407,9 +409,7 @@ export default function UsageView({
           {t("usageRefreshForce")}
         </button>
       </div>
-      <p className="border-b border-separator-border px-5 py-2 text-[10px] leading-4 text-text-tertiary">
-        {overview?.note ?? t("usageNote")}
-      </p>
+      <TechnicalDetails label={t("help")}><p>{t("usageNote")}</p></TechnicalDetails>
 
       <div className="min-h-0 flex-1 overflow-auto px-5 pb-8">
         {refreshError ? (
@@ -506,7 +506,7 @@ export default function UsageView({
               <p className="mt-1 text-[10px] text-text-tertiary">{t("usageCatalogHint")}</p>
               {overview.catalogScan && !overview.catalogScan.conclusive ? (
                 <div
-                  className="mt-2 rounded-md border border-border-warning-default/40 bg-background-tertiary-warning px-3 py-2 text-[10px] leading-4 text-state-warning-text"
+                  className="mt-2 rounded-md border border-separator-border bg-background-secondary-default px-3 py-2 text-xs leading-5 text-text-secondary"
                   data-testid="usage-catalog-inconclusive"
                 >
                   <p>{t("usageCatalogScanIncomplete", { roots: overview.catalogScan.scannedRoots })}</p>
@@ -542,7 +542,10 @@ export default function UsageView({
                     </tr>
                   </thead>
                   <tbody>
-                    {overview.catalog.map((entry) => {
+                    {[...overview.catalog].sort((a, b) => {
+                      const score = (entry: typeof a) => (entry.presence === "installed" || entry.installed ? 2 : 0) + (entry.quotaAccess !== "none" || entry.tokenAccess !== "none" ? 1 : 0);
+                      return score(b) - score(a);
+                    }).filter(entry => showOtherProducts || entry.presence === "installed" || entry.installed).map((entry) => {
                       // Older payloads (and the S06 counterexample fixture) only
                       // carry `installed`; derive the same three-state meaning
                       // instead of rendering an `undefined` label.
@@ -560,10 +563,10 @@ export default function UsageView({
                             {t(`usagePresence.${presence}`)}
                           </Badge>
                         </td>
-                        <td className="py-1 pr-2 text-text-secondary">
+                        <td className="whitespace-nowrap py-1 pr-2 text-text-secondary">
                           {t(`usageAccess.${entry.quotaAccess}`)}
                         </td>
-                        <td className="py-1 pr-2 text-text-secondary">
+                        <td className="whitespace-nowrap py-1 pr-2 text-text-secondary">
                           {t(`usageAccess.${entry.tokenAccess}`)}
                         </td>
                         <td className="py-1 pr-2 text-text-tertiary">
@@ -575,7 +578,7 @@ export default function UsageView({
                               entry.status === "supported"
                                 ? "green"
                                 : entry.status === "unverified"
-                                  ? "amber"
+                                  ? "neutral"
                                   : "neutral"
                             }
                           >
@@ -589,6 +592,7 @@ export default function UsageView({
                   </tbody>
                 </table>
               </div>
+              {overview.catalog.some(entry => entry.presence !== "installed" && !entry.installed) ? <button type="button" className="mt-3 rounded-md border border-separator-border px-3 py-1.5 text-xs" aria-expanded={showOtherProducts} data-testid="usage-other-products" onClick={() => setShowOtherProducts(value => !value)}>{t("usageOtherProducts", { count: overview.catalog.filter(entry => entry.presence !== "installed" && !entry.installed).length })}</button> : null}
             </section>
           </>
         ) : null}

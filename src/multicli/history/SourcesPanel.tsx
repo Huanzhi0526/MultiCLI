@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { PathInput, TechnicalDetails, localTime } from "../presentation";
 import type { MultiCliApi } from "../api";
 import { Badge, EmptyPanel, ErrorPanel, LoadingPanel } from "../components";
 import { toAppError } from "../navigation";
@@ -80,8 +81,8 @@ function SourceStatusDetails({ status }: { status: HistoryStatusView }) {
         <span>{t("historyMessagesIndexed", { count: status.messagesIndexed })}</span>
       </p>
       <p className="flex flex-wrap gap-x-2 text-[10px] text-text-tertiary">
-        <span>{t("historyLastAttempt", { value: status.lastAttemptAt ?? t("historyNotAvailable") })}</span>
-        <span>{t("historyLastSuccess", { value: status.lastSuccessAt ?? t("historyNotAvailable") })}</span>
+        <span>{t("historyLastAttempt", { value: localTime(status.lastAttemptAt) })}</span>
+        <span>{t("historyLastSuccess", { value: localTime(status.lastSuccessAt) })}</span>
       </p>
       {status.status === "ok" && !status.complete ? (
         <p className="text-[10px] text-amber-600" data-testid="history-incomplete">
@@ -143,8 +144,10 @@ export default function SourcesPanel({
       try {
         await action();
         onChanged();
+        return true;
       } catch (raw: unknown) {
         setActionError(toAppError(raw));
+        return false;
       } finally {
         setBusy(null);
       }
@@ -165,7 +168,8 @@ export default function SourcesPanel({
         root: trimmed,
         enabled: true,
       }),
-    ).then(() => {
+    ).then((ok) => {
+      if (!ok) return;
       setAdding(false);
       setRoot("");
       loadCandidates();
@@ -434,15 +438,10 @@ export default function SourcesPanel({
               </label>
               <label className="flex flex-col gap-1 text-[11px] text-text-tertiary">
                 {t("historyRoot")}
-                <input
-                  className="rounded-md border border-separator-border bg-background-primary-default px-2 py-1 text-xs text-text-primary"
-                  value={root}
-                  onChange={(event) => setRoot(event.target.value)}
-                  placeholder={t("historyManualRoot")}
-                  data-testid="history-add-root"
-                />
+                <PathInput value={root} onChange={setRoot} placeholder={t("historyManualRoot")} testId="history-add-root" />
               </label>
-              <label className="flex flex-col gap-1 text-[11px] text-text-tertiary">
+              <p className="text-xs text-text-tertiary">{t("historyProfileAuto")}</p>
+              <TechnicalDetails>              <label className="flex flex-col gap-1 text-[11px] text-text-tertiary">
                 {t("historyProfile")}
                 <input
                   className="rounded-md border border-separator-border bg-background-primary-default px-2 py-1 text-xs text-text-primary"
@@ -450,7 +449,7 @@ export default function SourcesPanel({
                   onChange={(event) => setProfile(event.target.value)}
                   data-testid="history-add-profile"
                 />
-              </label>
+              </label></TechnicalDetails>
               <button
                 type="button"
                 className="rounded-md border border-accent-300 bg-accent-50 px-3 py-1.5 text-xs text-accent-700 disabled:opacity-50"
@@ -474,7 +473,7 @@ export default function SourcesPanel({
             </div>
           ) : null}
           <p className="mt-2 text-[10px] leading-4 text-text-tertiary">
-            {candidates[0]?.note ?? t("historySourcesEmptyHint")}
+            {t("historyCandidateHint")}
           </p>
         </div>
       </div>

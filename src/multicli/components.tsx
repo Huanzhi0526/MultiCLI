@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { LocalTime, PathLabel, TechnicalDetails, messageRole } from "./presentation";
+import { useState, type ReactNode } from "react";
+import WorkspaceTree from "./WorkspaceTree";
 import { useTranslation } from "react-i18next";
 import { cx } from "@/utils/cx";
 import {
@@ -60,7 +62,7 @@ export function originTone(origin: SessionOrigin): Tone {
 export function statusTone(status: Capability["status"]): Tone {
   if (status === "supported") return "green";
   if (status === "unverified") return "amber";
-  return "red";
+  return "neutral";
 }
 
 export function evidenceTone(level: Capability["evidenceLevel"]): Tone {
@@ -234,6 +236,12 @@ export function ScopeList({
   onOpenHistory?: () => void;
 }) {
   const { t } = useTranslation("multicli");
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
+  const toggleFolder = (key: string) => setExpandedFolders(current => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
   const current = entry === "workspaces" ? workspaces : agents;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -272,40 +280,9 @@ export function ScopeList({
             actionTestId="empty-scope-open-history"
           />
         ) : null}
+        {entry === "workspaces" ? <WorkspaceTree items={workspaces.items} selectedId={selectedId}
+          expanded={expandedFolders} onToggle={toggleFolder} onSelect={onSelectWorkspace} /> : null}
         <ul className="flex flex-col gap-1">
-          {entry === "workspaces"
-            ? workspaces.items.map((item) => (
-                <li key={item.workspace.id}>
-                  <button
-                    type="button"
-                    className={cx(
-                      "w-full rounded-lg px-3 py-2 text-left",
-                      selectedId === item.workspace.id
-                        ? "bg-background-tertiary-default"
-                        : "hover:bg-background-primary-hover",
-                    )}
-                    onClick={() => onSelectWorkspace(item.workspace.id)}
-                    data-testid={`workspace-row-${item.workspace.id}`}
-                  >
-                    <span
-                      className="block truncate text-xs font-medium text-text-primary"
-                      title={item.workspace.path.displayPath}
-                    >
-                      {item.workspace.path.displayPath}
-                    </span>
-                    <span className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-text-tertiary">
-                      <span>{t("sessionCount", { count: item.sessionCount })}</span>
-                      {item.workspace.repoGroupId ? (
-                        <Badge tone="blue">{t("repoGroup")}</Badge>
-                      ) : null}
-                      {item.workspace.path.canonicalPath === null ? (
-                        <Badge tone="amber">{t("pathUnresolved")}</Badge>
-                      ) : null}
-                    </span>
-                  </button>
-                </li>
-              ))
-            : null}
           {entry === "agents"
             ? agents.items.map((item) => (
                 <li key={item.agent.id}>
@@ -324,7 +301,7 @@ export function ScopeList({
                       <span className="truncate text-xs font-medium text-text-primary">
                         {item.agent.displayName}
                       </span>
-                      <code className="text-[10px] text-text-tertiary">{item.agent.id}</code>
+
                     </span>
                     <span className="mt-1 flex flex-wrap gap-2 text-[11px] text-text-tertiary">
                       <span>{t("sessionCount", { count: item.sessionCount })}</span>
@@ -363,6 +340,7 @@ export function ScopeList({
 
 export function SessionList({
   sessions,
+  agentNames = {},
   selectedId,
   origin,
   onOriginChange,
@@ -372,6 +350,7 @@ export function SessionList({
   onOpenHistory,
 }: {
   sessions: PagedResource<SessionSummary>;
+  agentNames?: Record<string, string>;
   selectedId: string | null;
   origin: SessionOrigin | null;
   onOriginChange: (next: SessionOrigin | null) => void;
@@ -381,6 +360,9 @@ export function SessionList({
   onOpenHistory?: () => void;
 }) {
   const { t } = useTranslation("multicli");
+  const isTerminal = (item: SessionSummary) => item.session.sourceNamespace.split("/")[1] === "terminal";
+  const rows = [...sessions.items].sort((a,b) => Number(isTerminal(a)) - Number(isTerminal(b)));
+  const grouped = rows.some(isTerminal);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b border-separator-border px-4 py-3">
@@ -442,8 +424,9 @@ export function SessionList({
           />
         ) : null}
         <ul className="flex flex-col gap-1">
-          {sessions.items.map((item) => (
+          {rows.map((item, index) => (
             <li key={item.session.id}>
+              {grouped && (index === 0 || isTerminal(rows[index - 1]) !== isTerminal(item)) ? <p className="px-3 pb-2 pt-3 text-xs font-medium text-text-secondary">{t(isTerminal(item) ? "terminalSessionGroup" : "conversationSessionGroup")}</p> : null}
               <button
                 type="button"
                 aria-current={selectedId === item.session.id ? "true" : undefined}
@@ -454,19 +437,18 @@ export function SessionList({
                     : "border-transparent hover:bg-background-primary-hover",
                 )}
                 onClick={() => onSelect(item.session.id)}
+                title={`${item.session.title} · ${t("runCount", { count: item.runCount })} · ${t("workspaceCount", { count: item.workspaceIds.length })}`}
                 data-testid={`session-row-${item.session.id}`}
               >
                 <span className="block truncate text-xs font-medium text-text-primary">
                   {item.session.title || t("untitledSession")}
                 </span>
-                <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-text-tertiary">
+                <span className="mc-list-meta mt-1 text-[11px] text-text-tertiary">
                   <Badge tone={originTone(item.session.origin)}>
                     {t(`origin.${item.session.origin}`)}
                   </Badge>
-                  <code>{item.session.agentId}</code>
+                  <span className="mc-agent-name" title={item.session.agentId}>{agentNames[item.session.agentId] ?? item.session.agentId}</span>
                   <span>{t("messageCount", { count: item.messageCount })}</span>
-                  <span>{t("runCount", { count: item.runCount })}</span>
-                  <span>{t("workspaceCount", { count: item.workspaceIds.length })}</span>
                 </span>
               </button>
             </li>
@@ -523,7 +505,7 @@ function CapabilitySection({
             <Badge tone="green">
               {t("capabilitySummary.supported", { count: summary.supported })}
             </Badge>
-            <Badge tone="red">
+            <Badge tone="neutral">
               {t("capabilitySummary.unsupported", { count: summary.unsupported })}
             </Badge>
             <Badge tone="amber">
@@ -563,7 +545,7 @@ function CapabilitySection({
             data-testid={`capability-row-${capability.name}`}
           >
             <div className="flex flex-wrap items-center gap-1.5">
-              <code className="text-xs font-medium">{capability.name}</code>
+              <span className="text-xs font-medium">{t(`capabilityName.${capability.name}`, { defaultValue: capability.name })}</span>
               <Badge tone={statusTone(capability.status)}>
                 {t(`capabilityStatus.${capability.status}`)}
               </Badge>
@@ -579,7 +561,7 @@ function CapabilitySection({
             </p>
             <p className="mt-0.5 text-[10px] text-text-tertiary">
               {t("source")}: {capability.source} · {t("verifiedAt")}:{" "}
-              {capability.verifiedAt ?? t("notVerified")}
+              <LocalTime value={capability.verifiedAt} />
             </p>
           </li>
         ))}
@@ -682,6 +664,66 @@ export function SessionDetailView({
             </Badge>
           ) : null}
         </div>
+      </header>
+
+      <section className="px-5 py-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+          {t("messages")}
+        </h3>
+        {data.messages.length === 0 ? (
+          <p className="mt-2 text-xs text-text-tertiary">{t("noMessages")}</p>
+        ) : (
+        <ol className="mt-2 flex flex-col gap-2">
+          {data.messages.map((message) => (
+            <li
+              key={message.id}
+              className="mc-message"
+              data-role={messageRole(message.kind)}
+              data-testid={`message-row-${message.id}`}
+            >
+              <div className="flex flex-wrap items-center gap-2 text-[10px] text-text-tertiary">
+                <span>{t("messageSeq", { seq: message.seq })}</span>
+                <span className="font-medium">{t(`value.${message.kind}`, { defaultValue: message.kind })}</span>
+                <LocalTime value={message.observedAt} />
+
+              </div>
+              {messageRole(message.kind) === "tool" ? <details><summary className="mt-2 text-xs">{t("historyToolInput")}</summary><pre data-message-body className="mt-2">{messageText(message)}</pre></details> :
+              <p data-message-body className="mt-2 text-text-primary">{messageText(message)}</p>}
+            </li>
+          ))}
+        </ol>
+        )}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-text-tertiary" data-testid="detail-messages-loaded">
+            {t("detailMessagesLoaded", {
+              loaded: data.messages.length,
+              total: data.messageCount,
+            })}
+          </span>
+          {detail.hasMore ? (
+            <button
+              type="button"
+              className="rounded-md border border-separator-border px-3 py-1 text-xs"
+              onClick={onLoadMore}
+              disabled={detail.loadingMore}
+              data-testid="detail-load-more"
+            >
+              {detail.loadingMore ? t("loading") : t("loadMoreMessages")}
+            </button>
+          ) : null}
+        </div>
+        {detail.moreError ? (
+          <div className="mt-2">
+            <ErrorPanel
+              error={detail.moreError}
+              onRetry={onLoadMore}
+              scope="detail-more"
+              compact
+            />
+          </div>
+        ) : null}
+      </section>
+      <TechnicalDetails label={t("sessionInfo")}>
         <p className="mt-1 text-[11px] text-text-tertiary">
           <code data-testid="detail-session-id">{session.id}</code> ·{" "}
           {t("agent")}: <code>{session.agentId}</code> · {t("host")}:{" "}
@@ -701,8 +743,6 @@ export function SessionDetailView({
             <code className="break-all">{session.sourceNamespace}</code>
           </Field>
         </dl>
-      </header>
-
       <section className="border-b border-separator-border px-5 py-4">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
           {t("workspacesOfSession")}
@@ -714,7 +754,7 @@ export function SessionDetailView({
                 <Badge tone={link.role === "primary" ? "blue" : "neutral"}>
                   {link.role === "primary" ? t("primary") : t("related")}
                 </Badge>
-                <code className="text-[11px] break-all">{link.workspaceId}</code>
+                {link.path ? <PathLabel path={link.path.displayPath} /> : <code className="text-[11px] break-all">{link.workspaceId}</code>}
               </div>
               <p className="mt-1 text-[11px] text-text-tertiary">
                 {t("evidenceOfLink")}: {link.evidence}
@@ -763,22 +803,22 @@ export function SessionDetailView({
               {data.runs.map((run) => (
                 <tr key={run.id} data-testid={`run-row-${run.id}`}>
                   <td className="border-b border-separator-border py-1.5 whitespace-nowrap pr-2 font-mono">{run.id}</td>
-                  <td className="border-b border-separator-border py-1.5 whitespace-nowrap pr-2">{run.transport}</td>
-                  <td className="border-b border-separator-border py-1.5 whitespace-nowrap pr-2">{run.ownership}</td>
+                  <td className="border-b border-separator-border py-1.5 whitespace-nowrap pr-2">{t(`value.${run.transport}`, { defaultValue: run.transport })}</td>
+                  <td className="border-b border-separator-border py-1.5 whitespace-nowrap pr-2">{t(`value.${run.ownership}`, { defaultValue: run.ownership })}</td>
                   <td className="border-b border-separator-border py-1.5 whitespace-nowrap pr-2">
-                    {run.executionStatus}
+                    {t(`value.${run.executionStatus}`, { defaultValue: run.executionStatus })}
                   </td>
                   <td className="border-b border-separator-border py-1.5 whitespace-nowrap pr-2">
-                    {run.interactionStatus}
+                    {t(`value.${run.interactionStatus}`, { defaultValue: run.interactionStatus })}
                   </td>
                   <td className="border-b border-separator-border py-1.5 whitespace-nowrap pr-2">
-                    {run.evidenceLevel}
+                    {t(`value.${run.evidenceLevel}`, { defaultValue: run.evidenceLevel })}
                   </td>
                   <td className="border-b border-separator-border py-1.5 whitespace-nowrap pr-2">
-                    {run.startedAt ?? t("notAvailable")}
+                    <LocalTime value={run.startedAt} />
                   </td>
                   <td className="border-b border-separator-border py-1.5 whitespace-nowrap">
-                    {run.endedAt ?? t("notAvailable")}
+                    <LocalTime value={run.endedAt} />
                   </td>
                 </tr>
               ))}
@@ -790,63 +830,7 @@ export function SessionDetailView({
 
       <CapabilitySection capabilities={capabilities} />
 
-      <section className="px-5 py-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-          {t("messages")}
-        </h3>
-        {data.messages.length === 0 ? (
-          <p className="mt-2 text-xs text-text-tertiary">{t("noMessages")}</p>
-        ) : (
-        <ol className="mt-2 flex flex-col gap-2">
-          {data.messages.map((message) => (
-            <li
-              key={message.id}
-              className="rounded-lg border border-separator-border px-3 py-2"
-              data-testid={`message-row-${message.id}`}
-            >
-              <div className="flex flex-wrap items-center gap-2 text-[10px] text-text-tertiary">
-                <span>{t("messageSeq", { seq: message.seq })}</span>
-                <code>{message.kind}</code>
-                <span>{message.observedAt}</span>
-                {message.runId ? <code>{message.runId}</code> : null}
-              </div>
-              <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-text-primary">
-                {messageText(message)}
-              </p>
-            </li>
-          ))}
-        </ol>
-        )}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-[11px] text-text-tertiary" data-testid="detail-messages-loaded">
-            {t("detailMessagesLoaded", {
-              loaded: data.messages.length,
-              total: data.messageCount,
-            })}
-          </span>
-          {detail.hasMore ? (
-            <button
-              type="button"
-              className="rounded-md border border-separator-border px-3 py-1 text-xs"
-              onClick={onLoadMore}
-              disabled={detail.loadingMore}
-              data-testid="detail-load-more"
-            >
-              {detail.loadingMore ? t("loading") : t("loadMoreMessages")}
-            </button>
-          ) : null}
-        </div>
-        {detail.moreError ? (
-          <div className="mt-2">
-            <ErrorPanel
-              error={detail.moreError}
-              onRetry={onLoadMore}
-              scope="detail-more"
-              compact
-            />
-          </div>
-        ) : null}
-      </section>
+      </TechnicalDetails>
     </article>
   );
 }

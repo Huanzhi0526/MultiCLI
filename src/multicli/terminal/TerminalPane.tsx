@@ -22,7 +22,7 @@ const TERMINAL_EVENT = "multicli://terminal";
 /** Bound queued plus in-flight UTF-8 input to the backend writer's limit. */
 const INPUT_QUEUE_LIMIT = 1024 * 1024;
 
-const THEME = {
+const LIGHT_THEME = {
   background: "#ffffff",
   foreground: "#1f2328",
   cursor: "#1f2328",
@@ -45,6 +45,15 @@ const THEME = {
   brightCyan: "#3192aa",
   brightWhite: "#8c959f",
 };
+const DARK_THEME = {
+  ...LIGHT_THEME,
+  background: "#191919", foreground: "#e5e5e5", cursor: "#e5e5e5", cursorAccent: "#191919",
+  selectionBackground: "#414141", black: "#272727", red: "#ff8a80", green: "#97d895",
+  yellow: "#edce85", blue: "#8ab4f8", magenta: "#d6afff", cyan: "#86d8df", white: "#d4d4d4",
+  brightBlack: "#8e8e8e", brightRed: "#ffb4a9", brightGreen: "#b8ebb2", brightYellow: "#ffe5a1",
+  brightBlue: "#b0ccff", brightMagenta: "#e7c9ff", brightCyan: "#b5f0f3", brightWhite: "#ffffff",
+};
+
 
 async function copyText(text: string): Promise<boolean> {
   if (!text) return false;
@@ -76,6 +85,8 @@ export interface TerminalPaneProps {
   api: MultiCliApi;
   terminalId: string;
   active: boolean;
+  dark?: boolean;
+  fontSize?: number;
   onState: (state: TerminalRunState, exit: TerminalExitView | null) => void;
   onDropped: (droppedBefore: number, totalDropped: number) => void;
   onError: (error: AppError) => void;
@@ -95,6 +106,8 @@ export default function TerminalPane({
   api,
   terminalId,
   active,
+  dark = false,
+  fontSize = 13,
   onState,
   onDropped,
   onError,
@@ -116,6 +129,8 @@ export default function TerminalPane({
   const lastStateRef = useRef<{ state: TerminalRunState; exitCode: number | null } | null>(null);
   const callbacksRef = useRef({ onState, onDropped, onError, onCopyResult });
   const syncGeometryRef = useRef<(() => void) | null>(null);
+  const appearanceRef = useRef({ dark, fontSize });
+  appearanceRef.current = { dark, fontSize };
   const [ready, setReady] = useState(false);
 
   // Parent callbacks are re-created on every render; keeping them in a ref is
@@ -180,11 +195,11 @@ export default function TerminalPane({
         term = new modules.Terminal({
           fontFamily:
             '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei Mono", monospace',
-          fontSize: 13,
+          fontSize: appearanceRef.current.fontSize,
           lineHeight: 1.15,
           cursorBlink: true,
           scrollback: 5000,
-          theme: THEME,
+          theme: appearanceRef.current.dark ? DARK_THEME : LIGHT_THEME,
           convertEol: false,
           allowProposedApi: false,
         });
@@ -426,9 +441,18 @@ export default function TerminalPane({
     return () => window.clearTimeout(timer);
   }, [active]);
 
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || !ready) return;
+    term.options.theme = dark ? DARK_THEME : LIGHT_THEME;
+    term.options.fontSize = fontSize;
+    geometryRef.current = { width: 0, height: 0 };
+    syncGeometryRef.current?.();
+  }, [dark, fontSize, ready]);
+
   return (
     <div
-      className="relative h-full min-h-0 w-full overflow-hidden bg-white"
+      className="relative h-full min-h-0 w-full overflow-hidden bg-background-primary-default"
       data-testid={`terminal-pane-${terminalId}`}
       onContextMenu={(event) => {
         // Right click copies the selection when there is one; with no selection

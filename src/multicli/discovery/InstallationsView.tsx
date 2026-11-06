@@ -1,10 +1,11 @@
+import { localTime } from "../presentation";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MultiCliApi } from "../api";
 import { Badge, EmptyPanel, ErrorPanel, LoadingPanel } from "../components";
 import { usePagedResource } from "../usePagedResource";
 import type { InstallStatus, InstallationDiscoveryView } from "../types";
-import { DISCOVERY_AGENTS, Field, ReadOnlyNote, ScanStatusBar } from "./controls";
+import { DISCOVERY_AGENTS, Field, ScanStatusBar } from "./controls";
 import { useDiscoveryScan } from "./useDiscoveryScan";
 
 const statusTone: Record<InstallStatus, "green" | "amber" | "red" | "neutral"> = {
@@ -60,6 +61,7 @@ export default function InstallationsView({ api }: { api: MultiCliApi }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="installations-view">
       <ScanStatusBar
+        mode="installations"
         scan={scan}
         busy={busy}
         error={error}
@@ -100,7 +102,7 @@ export default function InstallationsView({ api }: { api: MultiCliApi }) {
           {t("refresh")}
         </button>
       </div>
-      <ReadOnlyNote />
+
 
       <div className="min-h-0 flex-1 overflow-auto px-5 pb-6">
         {installations.status === "loading" ? (
@@ -173,7 +175,7 @@ export default function InstallationsView({ api }: { api: MultiCliApi }) {
                       {t(`probeStatusValue.${item.probe.status}`)}
                     </Badge>
                     <span className="text-[10px] text-text-tertiary">
-                      {item.probe.checkedAt ?? t("notAvailable")}
+                      {localTime(item.probe.checkedAt)}
                     </span>
                   </span>
                 </Field>
@@ -196,7 +198,7 @@ export default function InstallationsView({ api }: { api: MultiCliApi }) {
               ) : null}
               <p className="mt-1 text-[10px] text-text-tertiary">
                 {t("discoveredFrom")}: {item.discoveredFrom} · {t("discoveredAt")}:{" "}
-                {item.discoveredAt}
+                {localTime(item.discoveredAt)}
               </p>
             </li>
           ))}

@@ -1,3 +1,4 @@
+import { localTime } from "../presentation";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MultiCliApi } from "../api";
@@ -246,7 +247,7 @@ export default function ProcessesView({ api }: { api: MultiCliApi }) {
                 {item.workspaceEvidence ? ` · ${item.workspaceEvidence}` : ""}
               </p>
               <p className="mt-1 text-[10px] text-text-tertiary">
-                {t("firstSeen")}: {item.firstSeenAt} · {t("lastSeen")}: {item.lastSeenAt}
+                {t("firstSeen")}: {localTime(item.firstSeenAt)} · {t("lastSeen")}: {localTime(item.lastSeenAt)}
               </p>
             </li>
           ))}

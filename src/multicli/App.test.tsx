@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -1068,14 +1068,15 @@ interface Rendered {
   cleanup: () => Promise<void>;
 }
 
-async function renderApp(api: MultiCliApi): Promise<Rendered> {
+async function renderApp(api: MultiCliApi, sessions = true, strict = false): Promise<Rendered> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<App api={api} />);
+    root.render(strict ? <StrictMode><App api={api} /></StrictMode> : <App api={api} />);
   });
   await flush();
+  if (sessions) { await click(byTestId(container, "view-sessions")!); await flush(); }
   return {
     container,
     root,
@@ -1110,6 +1111,19 @@ async function click(element: Element | null): Promise<void> {
   await flush();
 }
 
+async function chooseWorkspace(container: HTMLElement, id: string): Promise<void> {
+  // Folder navigation is deliberately collapsed initially. Open visible levels
+  // until the real workspace is reachable, then exercise the original filter.
+  for (let level = 0; level < 50; level++) {
+    const row = byTestId(container, `workspace-row-${id}`);
+    if (row) { await click(row); return; }
+    const branches = container.querySelectorAll('[data-testid="workspace-folder-toggle"][aria-expanded="false"]');
+    if (branches.length === 0) throw new Error(`workspace ${id} is not reachable`);
+    for (const branch of branches) await click(branch);
+  }
+  throw new Error(`workspace ${id} hierarchy is unexpectedly deep`);
+}
+
 let rendered: Rendered | null = null;
 
 afterEach(async () => {
@@ -1120,6 +1134,25 @@ afterEach(async () => {
 });
 
 describe("S01 navigation app", () => {
+  it("switches appearance without changing the current session and stores only the product preference", async () => {
+    localStorage.removeItem("multicli.theme");
+    try {
+      const api = new FakeApi();
+      rendered = await renderApp(api);
+      const first = api.sessions.items[0];
+      if (first) await click(byTestId(rendered.container, `session-row-${first.session.id}`));
+      const title = byTestId(rendered.container, "detail-title")?.textContent;
+      await click(byTestId(rendered.container, "theme-dark"));
+      expect(byTestId(rendered.container, "app-root")?.classList.contains("dark")).toBe(true);
+      expect(localStorage.getItem("multicli.theme")).toBe("dark");
+      expect(byTestId(rendered.container, "detail-title")?.textContent).toBe(title);
+      await click(byTestId(rendered.container, "theme-light"));
+      expect(byTestId(rendered.container, "app-root")?.classList.contains("dark")).toBe(false);
+      expect(localStorage.getItem("multicli.theme")).toBe("light");
+    } finally {
+      localStorage.removeItem("multicli.theme");
+    }
+  });
   it("shows distinct empty states and never fabricates demo rows", async () => {
     const api = new FakeApi();
     rendered = await renderApp(api);
@@ -1158,7 +1191,7 @@ describe("S01 navigation app", () => {
     ]);
     rendered = await renderApp(api);
 
-    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await chooseWorkspace(rendered.container, "ws-1");
     expect(api.sessionCalls.at(-1)?.workspaceId).toBe("ws-1");
     expect(byTestId(rendered.container, "session-row-s-1")).not.toBeNull();
     await click(byTestId(rendered.container, "session-row-s-1"));
@@ -1248,7 +1281,7 @@ describe("S01 navigation app", () => {
     ]);
     api.capabilityMoreFailures = 1;
     rendered = await renderApp(api);
-    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await chooseWorkspace(rendered.container, "ws-1");
     await click(byTestId(rendered.container, "session-row-s-1"));
     await click(byTestId(rendered.container, "capabilities-load-more"));
     expect(byTestId(rendered.container, "capabilities-more-error")).not.toBeNull();
@@ -1275,7 +1308,7 @@ describe("S01 navigation app", () => {
     rendered = await renderApp(api);
     expect(calls).toBe(1);
 
-    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await chooseWorkspace(rendered.container, "ws-1");
     expect(calls).toBe(2);
     await act(async () => {
       resolvers[1](page([summary("s-new", "a-1", "New")]));
@@ -1327,7 +1360,7 @@ describe("S01 navigation app", () => {
     api.details["s-1"] = detail("s-1", "a-1", "Session");
     api.detailFailures = 1;
     rendered = await renderApp(api);
-    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await chooseWorkspace(rendered.container, "ws-1");
     await click(byTestId(rendered.container, "session-row-s-1"));
     expect(byTestId(rendered.container, "detail-error")).not.toBeNull();
     expect(byTestId(rendered.container, "detail-error-code")?.textContent).toBe("database");
@@ -1342,7 +1375,7 @@ describe("S01 navigation app", () => {
     api.workspaces = page([workspace("ws-1", "C:\\Work\\Alpha")]);
     api.sessions = page([summary("s-1", "a-1", "Session")]);
     rendered = await renderApp(api);
-    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await chooseWorkspace(rendered.container, "ws-1");
     await click(byTestId(rendered.container, "session-row-s-1"));
     expect(byTestId(rendered.container, "detail-not-found")).not.toBeNull();
     expect(byTestId(rendered.container, "detail-error")).toBeNull();
@@ -1424,11 +1457,11 @@ describe("S02 discovery views", () => {
       "0.166.0",
     );
     expect(byTestIdPrefix(rendered.container, "installation-status-claude")?.textContent).toContain(
-      "missing-target",
+      "入口文件缺失",
     );
     expect(
       byTestIdPrefix(rendered.container, "installation-status-codebuddy")?.textContent,
-    ).toContain("historical-residue");
+    ).toContain("历史残留");
     const text = rendered.container.textContent ?? "";
     expect(text).toContain("unconfirmed-local");
     expect(text).toContain("shim target does not exist");
@@ -1538,7 +1571,7 @@ describe("S02 discovery views", () => {
     rendered = await renderApp(api);
     await click(byTestId(rendered.container, "view-processes"));
     await click(byTestId(rendered.container, "view-sessions"));
-    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await chooseWorkspace(rendered.container, "ws-1");
     await click(byTestId(rendered.container, "session-row-s-1"));
     expect(byTestId(rendered.container, "detail-session-id")?.textContent).toBe("s-1");
     expect(byTestId(rendered.container, "detail-count-messages")?.textContent).toBe("2");
@@ -1623,7 +1656,7 @@ describe("S03 history index", () => {
     expect(byTestId(rendered.container, "history-view")).not.toBeNull();
     expect(byTestId(rendered.container, "history-source-hsrc-1")).not.toBeNull();
     // The unconfirmed profile is shown as such, not as "default".
-    expect(rendered.container.textContent).toContain("配置 profile 未确认");
+    expect(rendered.container.textContent).toContain("配置尚未确认");
 
     const input = byTestId<HTMLInputElement>(rendered.container, "history-search-input");
     expect(input).not.toBeNull();
@@ -1643,11 +1676,9 @@ describe("S03 history index", () => {
 
     await click(byTestId(rendered.container, "history-resume-check"));
     expect(byTestId(rendered.container, "history-resume-status")?.textContent).toBe("可解析");
-    const resumeButton = byTestId<HTMLButtonElement>(
-      rendered.container,
-      "history-resume-disabled",
-    );
-    expect(resumeButton?.disabled).toBe(true);
+    expect(byTestId(rendered.container, "history-resume-disabled")).toBeNull();
+    expect(byTestId(rendered.container, "history-resume-check")?.textContent).toBe("继续会话");
+    expect(byTestId(rendered.container, "runtime-run-header")).toBeNull();
 
     // Rebuild asks for confirmation before it clears the derived index.
     await click(byTestId(rendered.container, "history-rebuild-hsrc-1"));
@@ -1677,9 +1708,6 @@ describe("S03 history index", () => {
     await click(byTestId(rendered.container,"history-session-hist-session-1"));
     expect(start).not.toHaveBeenCalled();
     await click(byTestId(rendered.container,"history-resume-check"));
-    expect(start).not.toHaveBeenCalled();
-    expect(byTestId<HTMLButtonElement>(rendered.container,"history-resume-disabled")?.disabled).toBe(false);
-    await click(byTestId(rendered.container,"history-resume-disabled"));
     await flush();
     expect(start).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledWith({sessionId:"hist-session-1",prompt:undefined});
@@ -1687,7 +1715,7 @@ describe("S03 history index", () => {
     expect(byTestId(rendered.container,"runtime-run-header")?.textContent).toContain(resumed.title);
   });
 
-  it("keeps an unknown resume target disabled even when an execution flag is present", async () => {
+  it("does not execute an unknown resume target even when an execution flag is present", async () => {
     const api = new FakeApi();
     api.sessions = page([summary("hist-session-1","codex","历史会话标题")]);
     api.historyResume = resumeTarget({status:"unknown",executionAvailable:true});
@@ -1696,7 +1724,7 @@ describe("S03 history index", () => {
     await click(byTestId(rendered.container,"view-history"));
     await click(byTestId(rendered.container,"history-session-hist-session-1"));
     await click(byTestId(rendered.container,"history-resume-check"));
-    expect(byTestId<HTMLButtonElement>(rendered.container,"history-resume-disabled")?.disabled).toBe(true);
+    expect(byTestId(rendered.container, "history-resume-status")?.textContent).toBe("不确定");
     expect(start).not.toHaveBeenCalled();
   });
 
@@ -1760,10 +1788,9 @@ describe("S03 history index", () => {
     await click(byTestId(rendered.container, "history-session-hist-session-1"));
     await click(byTestId(rendered.container, "history-resume-check"));
     expect(byTestId(rendered.container, "history-resume-status")?.textContent).toBe("被阻止");
-    expect(rendered.container.textContent).toContain("active-run");
-    expect(
-      byTestId<HTMLButtonElement>(rendered.container, "history-resume-disabled")?.disabled,
-    ).toBe(true);
+    expect(rendered.container.textContent).toContain("该会话仍有活动运行");
+    expect(byTestId(rendered.container, "history-resume-disabled")).toBeNull();
+    expect(byTestId(rendered.container, "runtime-run-header")).toBeNull();
   });
 
   it("pages messages with a cursor without duplicating or reordering rows", async () => {
@@ -1878,9 +1905,8 @@ describe("S03 history index", () => {
     await click(byTestId(rendered.container, "history-session-hist-session-1"));
     await click(byTestId(rendered.container, "history-resume-check"));
     expect(byTestId(rendered.container, "history-resume-status")?.textContent).toBe("不支持");
-    expect(
-      byTestId<HTMLButtonElement>(rendered.container, "history-resume-disabled")?.disabled,
-    ).toBe(true);
+    expect(byTestId(rendered.container, "history-resume-disabled")).toBeNull();
+    expect(byTestId(rendered.container, "runtime-run-header")).toBeNull();
   });
 
   it("sends agent, source and workspace filters with the search query", async () => {
@@ -1968,7 +1994,7 @@ describe("S03-R1 bounded session detail", () => {
       );
     };
     rendered = await renderApp(api);
-    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await chooseWorkspace(rendered.container, "ws-1");
     await click(byTestId(rendered.container, "session-row-s-big"));
 
     // The detail no longer calls getSession (unbounded); it asks for metadata
@@ -2014,7 +2040,7 @@ describe("S03-R1 bounded session detail", () => {
       });
     };
     rendered = await renderApp(api);
-    await click(byTestId(rendered.container, "workspace-row-ws-1"));
+    await chooseWorkspace(rendered.container, "ws-1");
     await click(byTestId(rendered.container, "session-row-s-a"));
     await click(byTestId(rendered.container, "session-row-s-b"));
     expect(byTestId(rendered.container, "detail-session-id")?.textContent).toBe("s-b");
@@ -2105,5 +2131,62 @@ describe("S04 managed terminal entry", () => {
     await click(byTestId(rendered.container, "app-quit"));
     await click(byTestId(rendered.container, "quit-confirm"));
     expect(api.quitCalls).toBe(2);
+  });
+});
+
+
+describe("centered CLI home", () => {
+  it("opens on the icon composer and keeps the project tree in the shared sidebar", async () => {
+    const api = new FakeApi();
+    api.workspaces = page([workspace("ws-1", "C:\\Work\\Alpha")]);
+    const start = vi.spyOn(api, "runtimeStart");
+    rendered = await renderApp(api, false);
+    const home = byTestId(rendered.container, "home-view")!;
+    expect(home.parentElement?.className).not.toContain("hidden");
+    await click(byTestId(home, "cli-select-claude-code"));
+    expect(start).not.toHaveBeenCalled();
+    await click(byTestId(rendered.container, "view-sessions"));
+    await chooseWorkspace(rendered.container, "ws-1");
+    const project = byTestId(rendered.container, "workspace-row-ws-1")!;
+    expect(project.closest("nav")).not.toBeNull();
+    expect(byTestId(rendered.container, "session-browser")!.contains(project)).toBe(false);
+    await click(byTestId(rendered.container, "view-home"));
+    expect(byTestId(home, "cli-select-claude-code")?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("dispatches one explicit start through the mounted runtime under StrictMode and preserves a failed draft", async () => {
+    const api = new FakeApi();
+    vi.spyOn(api, "runtimeCapabilities").mockResolvedValue({schemaVersion: 1, note: "fixture", items: [{
+      product: "claude-code", productName: "Claude Code", agentId: "claude", installationId: "claude-install",
+      version: "1", executable: null, transport: "native", structuredChat: "unverified", permissionFlow: "unverified",
+      toolEvents: "unverified", cancel: "unverified", resume: "unverified", evidence: "fixture", entry: null, reason: null, notes: [],
+    }]});
+    let reject!: (reason: unknown) => void;
+    const start = vi.spyOn(api, "runtimeStart").mockImplementation(() => new Promise<RuntimeRunView>((_, fail) => { reject = fail; }));
+    rendered = await renderApp(api, false, true);
+    const home = byTestId(rendered.container, "home-view")!;
+    const fill = async (id: string, value: string, textarea = false) => {
+      const element = byTestId(home, id)!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(textarea ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, "value")!.set!.call(element, value);
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    await fill("runtime-cwd-input", "D:\\项目");
+    await fill("runtime-prompt-input", "检查 UI 🧭", true);
+    await act(async () => {
+      byTestId<HTMLButtonElement>(home, "runtime-start")!.click();
+      byTestId<HTMLButtonElement>(home, "runtime-start")!.click();
+    });
+    expect(start).toHaveBeenCalledExactlyOnceWith({ installationId: "claude-install", cwd: "D:\\项目", prompt: "检查 UI 🧭" });
+    expect(byTestId(rendered.container, "runtime-host")?.className).not.toContain("hidden");
+    await click(byTestId(rendered.container, "view-home"));
+    expect(byTestId<HTMLButtonElement>(home, "runtime-start")!.disabled).toBe(true);
+    await act(async () => reject({ code: "unsupported", message: "fixture failure", retryable: false, details: {} }));
+    await flush();
+    expect(byTestId<HTMLTextAreaElement>(home, "runtime-prompt-input")!.value).toBe("检查 UI 🧭");
+    expect(byTestId<HTMLButtonElement>(home, "runtime-start")!.disabled).toBe(false);
+    await click(byTestId(rendered.container, "view-runtime"));
+    expect(rendered.container.textContent).toContain("fixture failure");
   });
 });

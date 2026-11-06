@@ -1,3 +1,4 @@
+import { localTime, TechnicalDetails } from "../presentation";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge, ErrorPanel } from "../components";
@@ -54,7 +55,9 @@ export function ScanStatusBar({
   settingsError,
   onRefresh,
   onIntervalChange,
+  mode = "processes",
 }: {
+  mode?: "installations" | "processes";
   scan: ScanView | null;
   busy: boolean;
   error: AppError | null;
@@ -77,12 +80,12 @@ export function ScanStatusBar({
           {t("scanGeneration", { generation: scan?.generation ?? 0 })}
         </span>
         <span className="text-[11px] text-text-tertiary">
-          {t("scanLastAttempt", { value: scan?.lastAttemptAt ?? t("notAvailable") })}
+          {t("scanLastAttempt", { value: localTime(scan?.lastAttemptAt) })}
         </span>
         <span className="text-[11px] text-text-tertiary" data-testid="scan-last-success">
-          {t("scanLastSuccess", { value: scan?.lastSuccessAt ?? t("notAvailable") })}
+          {t("scanLastSuccess", { value: localTime(scan?.lastSuccessAt) })}
         </span>
-        {scan ? (
+        {scan && mode === "processes" ? (
           <span className="text-[11px] text-text-tertiary">
             {t("scanCounts", {
               sampled: scan.sampledProcesses,
@@ -91,7 +94,7 @@ export function ScanStatusBar({
             })}
           </span>
         ) : null}
-        <label className="ml-auto flex items-center gap-1 text-[11px] text-text-tertiary">
+        {mode === "processes" ? <label className="ml-auto flex items-center gap-1 text-[11px] text-text-tertiary">
           {t("scanInterval")}
           <select
             className="rounded-md border border-separator-border bg-background-primary-default px-2 py-1 text-[11px] text-text-primary"
@@ -105,7 +108,7 @@ export function ScanStatusBar({
               </option>
             ))}
           </select>
-        </label>
+        </label> : null}
         <button
           type="button"
           className="rounded-md border border-separator-border px-3 py-1 text-[11px] text-text-secondary hover:bg-background-primary-hover disabled:opacity-50"
@@ -116,13 +119,13 @@ export function ScanStatusBar({
           {busy ? t("scanRunning") : t("scanRefresh")}
         </button>
       </div>
-      <p
+      {mode === "processes" ? <p
         className="text-[10px] leading-4 text-text-tertiary"
         data-testid="scan-note"
         title={scan?.note ?? undefined}
       >
         {t("scanNoteFallback")}
-      </p>
+      </p> : null}
       {settingsError ? (
         <ErrorPanel error={settingsError} scope="scan-settings" compact />
       ) : null}
@@ -141,8 +144,8 @@ export function ScanStatusBar({
 export function ReadOnlyNote() {
   const { t } = useTranslation("multicli");
   return (
-    <p className="px-5 py-2 text-[10px] leading-4 text-text-tertiary" data-testid="readonly-note">
+    <TechnicalDetails label={t("help")}><p className="text-xs leading-5 text-text-tertiary" data-testid="readonly-note">
       {t("discoveryReadOnlyNote")}
-    </p>
+    </p></TechnicalDetails>
   );
 }

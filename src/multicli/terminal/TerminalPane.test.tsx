@@ -24,6 +24,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("./xtermLoader", () => ({
   loadXterm: async () => ({
     Terminal: class {
+      options: { theme?: unknown; fontSize?: number } = {};
       cols = 80;
       rows = 24;
       loadAddon() {}

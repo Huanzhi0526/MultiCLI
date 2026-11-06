@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { LocalTime, PathLabel, TechnicalDetails, messageRole } from "../presentation";
 import type { MultiCliApi } from "../api";
 import { Badge, EmptyPanel, ErrorPanel, LoadingPanel } from "../components";
 import { toAppError } from "../navigation";
@@ -13,7 +14,7 @@ import type { HistorySessionState } from "./useHistory";
 
 function resumeTone(status: ResumeTargetView["status"]): "green" | "red" | "amber" | "neutral" {
   if (status === "resolved") return "green";
-  if (status === "blocked") return "red";
+  if (status === "blocked") return "amber";
   if (status === "unknown") return "amber";
   return "neutral";
 }
@@ -69,32 +70,29 @@ function MessageRow({
     <li
       id={`history-message-${message.id}`}
       ref={anchored ? registerAnchor : undefined}
-      className={
-        anchored
-          ? "rounded-lg border border-accent-300 bg-accent-50 px-3 py-2"
-          : "rounded-lg border border-separator-border px-3 py-2"
-      }
+      className={`mc-message ${anchored ? "ring-2 ring-accent-500" : ""}`}
+      data-role={messageRole(message.kind)}
       data-testid={`history-message-${message.id}`}
       data-anchored={anchored ? "true" : "false"}
     >
       <div className="flex flex-wrap items-center gap-2 text-[10px] text-text-tertiary">
         <span>{t("messageSeq", { seq: message.seq })}</span>
-        <code>{message.kind}</code>
-        <span>{message.observedAt}</span>
+        <span className="font-medium">{t(`value.${message.kind}`, { defaultValue: message.kind })}</span>
+        <LocalTime value={message.observedAt} />
         {typeof toolName === "string" ? <code>{toolName}</code> : null}
         {truncated ? <Badge tone="amber">{t("historySnippetTruncated")}</Badge> : null}
       </div>
-      {long ? (
+      {messageRole(message.kind) === "tool" && toolInput ? null : messageRole(message.kind) === "tool" ? <details className="mt-2"><summary>{t(`value.${message.kind}`, { defaultValue: message.kind })}</summary><pre data-message-body>{body}</pre></details> : long ? (
         <details className="mt-1">
           <summary className="cursor-pointer text-[11px] text-text-tertiary">
-            {body.slice(0, 240)}…
+            {Array.from(body).slice(0, 240).join("")}…
           </summary>
-          <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-text-primary">
+          <p data-message-body className="mt-2 text-text-primary">
             {body}
           </p>
         </details>
       ) : (
-        <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-text-primary">
+        <p data-message-body className="mt-2 text-text-primary">
           {body || `[${message.kind}]`}
         </p>
       )}
@@ -113,9 +111,7 @@ function MessageRow({
         </details>
       ) : null}
       {message.sourceRef ? (
-        <p className="mt-1 text-[9px] text-text-tertiary">
-          <code>{message.sourceRef}</code>
-        </p>
+        <TechnicalDetails><code>{message.sourceRef}</code></TechnicalDetails>
       ) : null}
     </li>
   );
@@ -133,6 +129,8 @@ function Metadata({ metadata }: { metadata: SessionMetadataView }) {
         <Badge tone="neutral">{t("historyReadOnly")}</Badge>
         <Badge tone="blue">{t(`origin.${session.origin}`)}</Badge>
       </div>
+      <p className="mt-2 text-xs text-text-tertiary">{t("messageCount", { count: metadata.messageCount })}</p>
+      <TechnicalDetails label={t("sessionInfo")}>
       <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-text-tertiary">
         <span>
           <code data-testid="history-detail-session-id">{session.id}</code>
@@ -155,11 +153,11 @@ function Metadata({ metadata }: { metadata: SessionMetadataView }) {
         </div>
         <div>
           <dt className="text-[10px] text-text-tertiary">{t("historyFirstMessage")}</dt>
-          <dd className="truncate">{metadata.firstMessageAt ?? t("historyNotAvailable")}</dd>
+          <dd className="truncate"><LocalTime value={metadata.firstMessageAt} /></dd>
         </div>
         <div>
           <dt className="text-[10px] text-text-tertiary">{t("historyLastMessage")}</dt>
-          <dd className="truncate">{metadata.lastMessageAt ?? t("historyNotAvailable")}</dd>
+          <dd className="truncate"><LocalTime value={metadata.lastMessageAt} /></dd>
         </div>
       </dl>
       {metadata.history ? (
@@ -190,7 +188,7 @@ function Metadata({ metadata }: { metadata: SessionMetadataView }) {
                 {workspace.role === "primary" ? t("primary") : t("related")}
               </Badge>
               <span className="break-all">
-                {workspace.path?.displayPath ?? workspace.workspaceId}
+                {workspace.path ? <PathLabel path={workspace.path.displayPath} /> : workspace.workspaceId}
               </span>
               <span>· {workspace.evidence}</span>
             </li>
@@ -202,11 +200,12 @@ function Metadata({ metadata }: { metadata: SessionMetadataView }) {
           <span>{t("historyEvents")}:</span>
           {metadata.messageKinds.map((kind) => (
             <span key={kind.kind}>
-              <code>{kind.kind}</code> {kind.count}
+              {t(`value.${kind.kind}`, { defaultValue: kind.kind })} {kind.count}
             </span>
           ))}
         </p>
       ) : null}
+      </TechnicalDetails>
     </div>
   );
 }
@@ -228,6 +227,7 @@ export function ResumeBlock({ api, sessionId, onResume }: { api: MultiCliApi; se
   }, [sessionId]);
 
   const check = useCallback(() => {
+    if (checking) return;
     const request = ++requestRef.current;
     setChecking(true);
     setError(null);
@@ -236,6 +236,7 @@ export function ResumeBlock({ api, sessionId, onResume }: { api: MultiCliApi; se
       .then((next) => {
         if (requestRef.current === request) {
           setTarget(next);
+          if (next.sessionId === sessionId && next.status === "resolved" && next.executionAvailable) onResume?.(sessionId);
         }
       })
       .catch((raw: unknown) => {
@@ -248,34 +249,19 @@ export function ResumeBlock({ api, sessionId, onResume }: { api: MultiCliApi; se
           setChecking(false);
         }
       });
-  }, [api, sessionId]);
+  }, [api, sessionId, onResume, checking]);
 
-  const canResume = Boolean(onResume && target?.sessionId === sessionId && target.status === "resolved" && target.executionAvailable);
+  const legacyCodes = ["active-run", "live-process-same-workspace", "live-process-unlinked", "installation-not-confirmed", "agent-not-in-history-products"];
+  const code = target?.reasonCode ?? (target?.conflicts.some(item => item.kind === "active-run") ? "active-run" :
+    target && !target.nativeId ? "missing-native-id" : legacyCodes.find(code => target?.evidence.includes(code)) ?? (target?.status === "resolved" ? "resolved" : null));
+  const reasonText = code ? t(`resumeReason.${code}`, { defaultValue: t("historyResumeGeneric") }) : t("historyResumeGeneric");
 
   return (
     <section className="border-b border-separator-border px-5 py-3" data-testid="history-resume">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-          {t("historyResumeCheck")}
-        </h3>
-        <button
-          type="button"
-          className="rounded-md border border-separator-border px-2 py-1 text-[11px] hover:bg-background-primary-hover disabled:opacity-50"
-          onClick={check}
-          disabled={checking}
-          data-testid="history-resume-check"
-        >
-          {checking ? t("historyResumeChecking") : t("historyResumeCheck")}
-        </button>
-        <button
-          type="button"
-          className="ml-auto rounded-md border border-separator-border px-2 py-1 text-[11px] disabled:opacity-60"
-          disabled={!canResume || checking}
-          onClick={() => { if (canResume) onResume?.(sessionId); }}
-          title={t("historyResumeDisabled")}
-          data-testid="history-resume-disabled"
-        >
-          {t("historyResumeNoExecution")}
+        <button type="button" className="mc-primary rounded-md border px-3 py-1.5 text-xs disabled:opacity-50"
+          onClick={check} disabled={checking} data-testid="history-resume-check">
+          {checking ? t("historyResumeChecking") : onResume ? t("historyResumeAction") : t("historyResumeInspect")}
         </button>
       </div>
       {error ? (
@@ -289,30 +275,16 @@ export function ResumeBlock({ api, sessionId, onResume }: { api: MultiCliApi; se
             <Badge tone={resumeTone(target.status)} testId="history-resume-status">
               {t(`historyResume.${target.status}`)}
             </Badge>
-            <code className="text-[10px] text-text-tertiary">
-              {target.nativeId ?? t("historyNotAvailable")}
-            </code>
             {target.product ? <span className="text-[10px]">{target.product}</span> : null}
           </div>
-          <p className="text-[11px] text-text-secondary">
-            {t("historyResumeReason")}: {target.reason}
-          </p>
-          {target.conflicts.length > 0 ? (
-            <ul className="flex flex-col gap-1">
-              {target.conflicts.map((conflict, index) => (
-                <li
-                  key={`${conflict.kind}-${index}`}
-                  className="rounded border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-700"
-                >
-                  <code>{conflict.kind}</code> · {conflict.detail}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {target.evidence.length > 0 ? (
-            <p className="text-[10px] text-text-tertiary">{target.evidence.join(" · ")}</p>
-          ) : null}
-          <p className="text-[10px] leading-4 text-text-tertiary">{target.note}</p>
+          <p className="text-xs leading-5 text-text-secondary" role="status">{reasonText}</p>
+          <TechnicalDetails>
+            <code>{target.nativeId ?? t("historyNotAvailable")}</code>
+            <p>{target.reason}</p>
+            {Array.from(new Set(target.conflicts.map(item => `${item.kind}: ${item.detail}`))).map(item => <p key={item}>{item}</p>)}
+            <p>{Array.from(new Set(target.evidence)).join(" · ")}</p>
+            <p>{target.note}</p>
+          </TechnicalDetails>
         </div>
       ) : null}
     </section>

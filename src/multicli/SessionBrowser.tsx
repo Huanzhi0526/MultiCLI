@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { createPortal } from "react-dom";
 import type { MultiCliApi } from "./api";
 import { EntryTabs, ScopeList, SessionDetailView, SessionList } from "./components";
 import { sessionFilterKey } from "./navigation";
@@ -24,11 +25,13 @@ export default function SessionBrowser({
   api,
   onResume,
   onNavigate,
+  sidebarHost,
 }: {
   api: MultiCliApi;
   onResume?: (sessionId: string) => void;
   /** First-run guidance: an empty list points at the page that fills it. */
   onNavigate?: (view: "history" | "installations" | "terminal" | "runtime") => void;
+  sidebarHost?: HTMLElement | null;
 }) {
   const [entry, setEntry] = useState<Entry>("workspaces");
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -136,9 +139,7 @@ export default function SessionBrowser({
     }
   }, [agents, capabilities, detail, selectedSessionId, sessions, workspaces]);
 
-  return (
-    <div className="flex min-h-0 flex-1" data-testid="session-browser">
-      <aside className="flex w-72 shrink-0 flex-col border-r border-separator-border">
+  const scope = <div className="mc-project-scope flex min-h-0 flex-1 flex-col">
         <div className="p-3">
           <EntryTabs entry={entry} onChange={selectEntry} />
         </div>
@@ -153,11 +154,16 @@ export default function SessionBrowser({
           onRetry={refreshAll}
           onOpenHistory={onNavigate ? () => onNavigate("history") : undefined}
         />
-      </aside>
+      </div>;
+
+  return (
+    <div className="flex min-h-0 flex-1" data-testid="session-browser">
+      {sidebarHost ? createPortal(scope, sidebarHost) : <aside className="flex w-72 shrink-0 flex-col border-r border-separator-border">{scope}</aside>}
 
       <section className="flex w-[24rem] shrink-0 flex-col border-r border-separator-border">
         <SessionList
           sessions={sessions}
+          agentNames={Object.fromEntries(agents.items.map(item => [item.agent.id, item.agent.displayName]))}
           selectedId={selectedSessionId}
           origin={origin}
           onOriginChange={changeOrigin}

@@ -1503,9 +1503,11 @@ pub fn run() {
     // currently invalid (for example a file blocking the directory). The UI
     // still receives the real database error and a retry action.
     let webview_directory = webview_data_directory(&root, runtime.profile());
-    // No upstream plugins, startup migrations, history scan, network listener,
+    // Only the local path picker plugin is enabled. No upstream plugins,
+    // startup migrations, history scan, network listener,
     // credential probing, CLI installation, updater or analytics is registered.
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(runtime)
         .setup(move |app| {
             let window = tauri::WebviewWindowBuilder::new(

@@ -47,10 +47,12 @@ pub fn resolve_resume_target(
     let mut conflicts: Vec<ResumeConflictView> = Vec::new();
     let mut evidence: Vec<String> = Vec::new();
     let mut status = "resolved".to_string();
+    let mut reason_code = "resolved".to_string();
     let mut reason = "a native id and a product are known".to_string();
 
     if session.native_id.is_none() {
         status = "unsupported".to_string();
+        reason_code = "missing-native-id".to_string();
         reason = "the session has no native id, so no product target can be named".to_string();
         conflicts.push(ResumeConflictView {
             kind: "missing-native-id".to_string(),
@@ -59,6 +61,7 @@ pub fn resolve_resume_target(
     }
     if product.is_none() {
         status = "unsupported".to_string();
+        reason_code = "agent-not-in-history-products".to_string();
         reason = "no resume target is known for this agent".to_string();
         evidence.push("agent-not-in-history-products".to_string());
     }
@@ -78,6 +81,7 @@ pub fn resolve_resume_target(
     }
     if !active_runs.is_empty() {
         status = "blocked".to_string();
+        reason_code = "active-run".to_string();
         reason = "an active run can still write this session".to_string();
     }
 
@@ -114,11 +118,13 @@ pub fn resolve_resume_target(
     }
     if related_live > 0 && status == "resolved" {
         status = "unknown".to_string();
+        reason_code = "live-process-same-workspace".to_string();
         reason =
             "a live instance of the same product is in this workspace; its session is not verifiable, so idleness cannot be claimed"
                 .to_string();
     } else if !alive.is_empty() && status == "resolved" {
         status = "unknown".to_string();
+        reason_code = "live-process-unlinked".to_string();
         reason = "live instances of this product exist; none can be matched to this native session"
             .to_string();
         evidence.push("live-process-unlinked".to_string());
@@ -137,6 +143,7 @@ pub fn resolve_resume_target(
         .or_else(|| installations.first().cloned());
     if preferred_installation.is_none() && status == "resolved" {
         status = "unknown".to_string();
+        reason_code = "installation-not-confirmed".to_string();
         reason = "no confirmed installation is registered for this product".to_string();
         evidence.push("installation-not-confirmed".to_string());
     }
@@ -156,6 +163,7 @@ pub fn resolve_resume_target(
         config_profile_id,
         status,
         reason,
+        reason_code,
         installation_id: preferred_installation.as_ref().map(|item| item.id.clone()),
         executable,
         workspaces,

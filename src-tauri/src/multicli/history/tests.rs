@@ -1493,6 +1493,7 @@ fn resume_resolution_is_read_only_and_reports_conflicts() {
     // No installation yet: unknown, not resolved.
     let unknown = resume::resolve_resume_target(&fixture.service, &session_id).unwrap();
     assert_eq!(unknown.status, "unknown");
+    assert_eq!(unknown.reason_code, "installation-not-confirmed");
     assert!(!unknown.execution_available);
     assert!(unknown.conflicts.is_empty());
 
@@ -1514,6 +1515,7 @@ fn resume_resolution_is_read_only_and_reports_conflicts() {
         .unwrap();
     let resolved = resume::resolve_resume_target(&fixture.service, &session_id).unwrap();
     assert_eq!(resolved.status, "resolved");
+    assert_eq!(resolved.reason_code, "resolved");
     assert_eq!(
         resolved.native_id.as_deref(),
         Some("019a0000-0000-7000-8000-000000000012")
@@ -1545,6 +1547,7 @@ fn resume_resolution_is_read_only_and_reports_conflicts() {
         .unwrap();
     let blocked = resume::resolve_resume_target(&fixture.service, &session_id).unwrap();
     assert_eq!(blocked.status, "blocked");
+    assert_eq!(blocked.reason_code, "active-run");
     assert_eq!(blocked.conflicts[0].kind, "active-run");
     let runs_before = {
         let conn = fixture.service.store().connection().lock();

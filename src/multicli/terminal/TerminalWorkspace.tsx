@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { PathInput, TechnicalDetails } from "../presentation";
 import type { MultiCliApi } from "../api";
 import type {
   AppError,
@@ -39,11 +40,14 @@ const STATUS_POLL_MS = 1200;
 export default function TerminalWorkspace({
   api,
   visible = true,
+  dark = false,
 }: {
   api: MultiCliApi;
   visible?: boolean;
+  dark?: boolean;
 }) {
   const { t } = useTranslation("multicli");
+  const [fontSize, setFontSize] = useState(() => { try { const value = Number(localStorage.getItem("multicli.terminalFontSize")); return value >= 11 && value <= 20 ? value : 13; } catch { return 13; } });
   const [model, setModel] = useState<TabModel>({ tabs: [], activeId: null });
   const [targets, setTargets] = useState<TerminalTargetsView | null>(null);
   const [targetsError, setTargetsError] = useState<AppError | null>(null);
@@ -260,7 +264,7 @@ export default function TerminalWorkspace({
           type="button"
           className="rounded-md border border-separator-border px-3 py-1.5 text-xs hover:bg-background-primary-hover disabled:opacity-60"
           data-testid="terminal-stop-interrupt"
-          disabled={!activeTab || !isLive(activeTab.state)}
+          disabled={busy || !activeTab || !isLive(activeTab.state)}
           onClick={() => activeTab && void stop(activeTab.terminalId, "interrupt")}
         >
           {t("terminalCtrlC")}
@@ -269,16 +273,16 @@ export default function TerminalWorkspace({
           type="button"
           className="rounded-md border border-separator-border px-3 py-1.5 text-xs hover:bg-background-primary-hover disabled:opacity-60"
           data-testid="terminal-stop-gentle"
-          disabled={!activeTab || !isLive(activeTab.state)}
+          disabled={busy || !activeTab || !isLive(activeTab.state)}
           onClick={() => activeTab && void stop(activeTab.terminalId, "gentle")}
         >
           {t("terminalGentleStop")}
         </button>
         <button
           type="button"
-          className="rounded-md border border-separator-border px-3 py-1.5 text-xs hover:bg-background-primary-hover disabled:opacity-60"
+          className="mc-danger rounded-md border px-3 py-1.5 text-xs disabled:opacity-60"
           data-testid="terminal-stop-force"
-          disabled={!activeTab || !isLive(activeTab.state)}
+          disabled={busy || !activeTab || !isLive(activeTab.state)}
           onClick={() => activeTab && void stop(activeTab.terminalId, "force")}
         >
           {t("terminalForceStop")}
@@ -292,13 +296,16 @@ export default function TerminalWorkspace({
         >
           {t("terminalCloseTab")}
         </button>
-        <span className="ml-auto text-[11px] text-text-tertiary">
+        <label className="ml-auto flex items-center gap-2 text-xs text-text-secondary">{t("terminalFontSize")}<select value={fontSize} onChange={event => { const value = Number(event.target.value); setFontSize(value); try { localStorage.setItem("multicli.terminalFontSize", String(value)); } catch { /* In-memory setting remains usable. */ } }}>
+          {[11,12,13,14,16,18,20].map(size => <option key={size} value={size}>{size}</option>)}
+        </select></label>
+        <TechnicalDetails label={t("help")}>        <span className="text-xs text-text-tertiary">
           {t("terminalHint", {
-            max: targets?.limits.maxTerminals ?? 0,
-            buffer: formatBytes(targets?.limits.bufferBytes ?? 0),
-            log: formatBytes(targets?.limits.logBytes ?? 0),
+            max: targets?.limits.maxTerminals ?? "—",
+            buffer: targets ? formatBytes(targets.limits.bufferBytes) : "—",
+            log: targets ? formatBytes(targets.limits.logBytes) : "—",
           })}
-        </span>
+        </span></TechnicalDetails>
       </div>
 
       {model.tabs.length > 0 ? (
@@ -390,7 +397,7 @@ export default function TerminalWorkspace({
               {t("terminalEmpty")}
             </p>
             <p className="max-w-xl text-xs text-text-tertiary">{t("terminalEmptyHint")}</p>
-            <p className="max-w-xl text-[11px] text-text-tertiary">{targets?.note}</p>
+
           </div>
         ) : null}
         {model.tabs.map((tab) => (
@@ -404,6 +411,8 @@ export default function TerminalWorkspace({
           >
             <TerminalPane
               api={api}
+              dark={dark}
+              fontSize={fontSize}
               terminalId={tab.terminalId}
               active={visible && tab.terminalId === model.activeId}
               onState={(state, exit) => handleState(tab.terminalId, state, exit)}
@@ -465,6 +474,8 @@ function StatusBar({ view, tabTitleText }: { view: TerminalView; tabTitleText: s
           title: tabTitleText,
         })}
       </span>
+      <span data-testid="terminal-status-summary">{identity ? `PID ${identity.pid}` : t("terminalStatusNoPid")} · {exit ? t("terminalStatusExit", { code: exit.code === null ? t("terminalNoCode") : String(exit.code), signal: exit.signal ?? t("terminalNoSignal") }) : view.state === "exited" || view.state === "failed" ? t("terminalStatusNoExit") : t("terminalStatusRunning")}</span>
+      <div className="col-span-2"><TechnicalDetails><div className="grid grid-cols-1 gap-2 break-all">
       <span data-testid="terminal-status-chain">
         {t("terminalStatusChain", { chain: t(CHAIN_LABEL[view.launchChain]) })}
       </span>
@@ -513,6 +524,7 @@ function StatusBar({ view, tabTitleText }: { view: TerminalView; tabTitleText: s
           })}
         </span>
       ) : null}
+      </div></TechnicalDetails></div>
     </div>
   );
 }
@@ -631,9 +643,9 @@ function NewTerminalDialog({
           onChange={(event) => setSelectedId(event.target.value)}
         >
           {items.map((item) => (
-            <option key={item.id} value={item.id}>
+            <option key={item.id} value={item.id} disabled={item.status !== "ready"}>
               {item.label}
-              {item.status === "ready" ? "" : ` · ${item.status}`}
+              {item.status === "ready" ? "" : ` · ${t(`value.${item.status}`, { defaultValue: item.status })}`}
             </option>
           ))}
         </select>
@@ -652,13 +664,7 @@ function NewTerminalDialog({
         <label className="mt-3 block text-[11px] font-medium" htmlFor="terminal-cwd">
           {t("terminalCwdLabel")}
         </label>
-        <input
-          id="terminal-cwd"
-          data-testid="terminal-cwd-input"
-          className="mt-1 w-full rounded-md border border-separator-border bg-background-primary-default px-2 py-1.5 text-xs"
-          value={cwd}
-          onChange={(event) => setCwd(event.target.value)}
-        />
+        <PathInput id="terminal-cwd" testId="terminal-cwd-input" value={cwd} onChange={setCwd} />
 
         <div className="mt-3 grid grid-cols-2 gap-3">
           <div>
@@ -709,7 +715,7 @@ function NewTerminalDialog({
             type="button"
             className="rounded-md bg-background-primary-default px-3 py-1.5 text-xs shadow-sm ring-1 ring-separator-border disabled:opacity-60"
             data-testid="terminal-dialog-create"
-            disabled={busy || !selected}
+            disabled={busy || !selected || selected.status !== "ready"}
             onClick={submit}
           >
             {busy ? t("terminalCreating") : t("terminalCreate")}

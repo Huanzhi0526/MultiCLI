@@ -490,6 +490,8 @@ export interface ResumeTargetView {
   configProfileId: string | null;
   status: "resolved" | "blocked" | "unknown" | "unsupported";
   reason: string;
+  /** Additive: old installed binaries may omit this field. */
+  reasonCode?: string;
   installationId: string | null;
   executable: HostPath | null;
   workspaces: HostPath[];
